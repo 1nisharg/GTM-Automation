@@ -1,0 +1,42 @@
+# .gitignore — GTM UAE Partner Pipeline
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ── Data files (keep out of version control) ──────────────────────────────────
+*.xlsx
+*.xls
+*.csv
+data/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# (docker-compose.yml and Dockerfile ARE committed — only ignore local overrides)
+docker-compose.override.yml
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Pytest / coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,71 @@
+# docker-compose.yml
+# GTM UAE Partner Pipeline — local development stack
+#
+# Services
+# --------
+#   postgres   — PostgreSQL 16 database (auto-initialises schema on first start)
+#   pipeline   — Python pipeline runner (runs graph.py)
+#
+# Usage
+# -----
+#   1. Copy .env.example to .env and fill in credentials.
+#   2. Place the Excel file at the repo root as:
+#         "GTM UAE_ Track 1 & 2 Db.xlsx"
+#   3. Start the DB only (first time — let Postgres init):
+#         docker compose up postgres -d
+#   4. Run the migration to load Excel → Postgres:
+#         docker compose run --rm pipeline python scripts/migrate_excel_to_db.py
+#   5. Run the full pipeline:
+#         docker compose run --rm pipeline python graph.py
+#   6. To reset the DB entirely (drops all data):
+#         docker compose down -v
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: gtm_uae_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-gtm_uae}
+      POSTGRES_USER:     ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # Persist data across container restarts
+      - postgres_data:/var/lib/postgresql/data
+      # Auto-run DDL on first startup (only when volume is empty)
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-gtm_uae}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── Pipeline runner ─────────────────────────────────────────────────────────
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gtm_uae_pipeline
+    env_file: .env
+    environment:
+      # Override DB_HOST so the pipeline container reaches the postgres service
+      DB_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount repo so code changes reflect immediately (no rebuild needed)
+      - .:/app
+      # Mount Excel file separately if it lives outside the repo
+      # - /path/to/your/excel:/app/data/partners.xlsx:ro
+    # Default command — override with: docker compose run pipeline python <script>
+    command: python graph.py
+
+volumes:
+  postgres_data:
+    name: gtm_uae_postgres_data
