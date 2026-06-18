@@ -7,7 +7,10 @@ A **pure agentic workflow** built with [LangGraph](https://github.com/langchain-
 ---
 
 ## Pipeline Overview
-
+\GTM_workflow_mondee\.env
+\GTM_workflow_mondee\backend\.env
+\GTM_workflow_mondee\enrichment_sources\.env
+\GTM_workflow_mondee\frontend\.env
 ```
 Discovery → Enrichment → Outreach → Onboarding → Documentation → Boarding/Live
    ✅           ✅          🔲            🔲              🔲              🔲
