@@ -5,15 +5,32 @@ Discovery Node — Stage 1 of the pipeline.
 
 Strategy
 --------
-1. DB first — query partners table for matching subcategory + status
-2. Apollo prospecting gap-fill — if DB returns < APOLLO_PROSPECTING_MIN
-   results, Apollo discovers additional UAE operators for that category
-   and appends them (deduped by name)
+AUTO-DETECT the input type, then run the appropriate query:
 
-Apollo-discovered partners are:
-- Tagged sheet_source = "apollo_prospecting"
-- Upserted into partners table for future runs
-- Passed directly to enrichment with whatever Apollo already found
+  MODE: "name"
+    Input looks like a specific company name (e.g. "Al Rakha Tourism",
+    "Mondee", "Desert Safari Adventures LLC").
+    → Fuzzy ILIKE match on partner_name.
+    → No Apollo prospecting (we're looking for one specific company).
+    → Returns ALL matching partners regardless of status.
+
+  MODE: "category"
+    Input looks like a category/subcategory theme (e.g. "food activities",
+    "Adventure & Extreme Sports", "desert safari").
+    → Tag match + ILIKE on subcategories column (original behaviour).
+    → Apollo prospecting gap-fill if DB results < threshold.
+    → Only "Yet to Start" / "Partner Outreach" status partners.
+
+Auto-detection heuristic
+-------------------------
+1. Try a fast name-match query against partner_name (ILIKE).
+2. If it returns ≥ 1 result → mode = "name", return those results.
+3. If it returns 0 results → mode = "category", run the subcategory query.
+   This means:
+   - "al rakha tourism"  → name match found → returns that specific company
+   - "food activities"   → no name match → falls through to category search
+   - "Mondee"            → name match found → returns Mondee specifically
+   - "desert safari"     → likely no exact name match → category search
 """
 
 import logging
@@ -27,12 +44,46 @@ logger = logging.getLogger(__name__)
 
 STATUSES_TO_ENRICH = ["Yet to Start", "Partner Outreach"]
 
-# Minimum DB results before Apollo prospecting kicks in
+# Minimum DB results before Apollo prospecting kicks in (category mode only)
 _APOLLO_MIN_THRESHOLD: int = int(os.getenv("APOLLO_PROSPECTING_MIN", "10"))
 # Max Apollo partners to add per run
 _APOLLO_MAX_PROSPECT:  int = int(os.getenv("APOLLO_PROSPECTING_MAX", "30"))
 
-_DISCOVERY_QUERY = """
+# ── Query: name search ────────────────────────────────────────────────────────
+# Searches partner_name with ILIKE — case-insensitive partial match.
+# Returns ALL statuses (not restricted to "Yet to Start") because if you
+# search for a specific company you want to see it regardless of its pipeline
+# status — even if already enriched or onboarded.
+_NAME_SEARCH_QUERY = """
+SELECT
+    id,
+    partner_name,
+    digitisation,
+    category,
+    subcategories,
+    subcategory_tags,
+    website,
+    product_count,
+    status,
+    integrated,
+    region,
+    phone_number,
+    email_id,
+    linkedin_profile,
+    sheet_source
+FROM partners
+WHERE partner_name ILIKE $1
+ORDER BY
+    -- Exact prefix match scores highest (e.g. "Al Rakha" → "Al Rakha Tourism" first)
+    CASE WHEN lower(partner_name) = lower($2) THEN 0
+         WHEN lower(partner_name) LIKE lower($2) || '%' THEN 1
+         ELSE 2
+    END,
+    partner_name;
+"""
+
+# ── Query: category search (original behaviour) ───────────────────────────────
+_CATEGORY_SEARCH_QUERY = """
 SELECT
     id,
     partner_name,
@@ -54,6 +105,7 @@ WHERE status = ANY($1)
   AND (
       $2 = ANY(subcategory_tags)          -- exact tag match (preferred)
       OR subcategories ILIKE $3           -- fallback for untagged rows
+      OR category ILIKE $3               -- also search the category column
   )
 ORDER BY
     ($2 = ANY(subcategory_tags)) DESC,   -- exact matches first
@@ -79,48 +131,86 @@ RETURNING id, partner_name;
 
 async def discovery_node(state: GraphState) -> dict:
     """
-    LangGraph node: discover partners for the given category.
+    LangGraph node: discover partners using auto-detected search mode.
 
     Flow:
-      1. Query DB for matching partners
-      2. If results < threshold → run Apollo prospecting for the category
-      3. Upsert Apollo-found partners to DB
-      4. Merge and return deduplicated list
+      1. Try name match first (fast ILIKE on partner_name)
+      2. If name match returns results → "name" mode, return them
+      3. If name match returns nothing → "category" mode, run subcategory query
+      4. In category mode: if results < threshold → Apollo prospecting gap-fill
+      5. Merge + deduplicate and return
 
     Returns
     -------
-    dict: {"discovered_partners": list[dict]}
+    dict: {"discovered_partners": list[dict], "search_mode": str}
     """
-    input_category = state["input_category"].strip()
-    run_id = state.get("run_id", "")
-    prefix = f"[{run_id}] " if run_id else ""
-    like_pattern = f"%{input_category}%"
-
-    logger.info(
-        "%sDiscovery: searching DB for subcategory=%r, statuses=%r",
-        prefix, input_category, STATUSES_TO_ENRICH,
-    )
+    raw_input   = state["input_category"].strip()
+    run_id      = state.get("run_id", "")
+    prefix      = f"[{run_id}] " if run_id else ""
+    like_pattern = f"%{raw_input}%"
 
     pool = await get_pool()
 
-    # ── Step 1: DB query ───────────────────────────────────────────────────
+    # ── Step 1: Try name match first ──────────────────────────────────────
+    logger.info(
+        "%sDiscovery: input=%r — trying name match first…",
+        prefix, raw_input,
+    )
+
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_DISCOVERY_QUERY, STATUSES_TO_ENRICH, input_category, like_pattern)
+        name_rows = await conn.fetch(
+            _NAME_SEARCH_QUERY,
+            like_pattern,   # $1 — ILIKE pattern
+            raw_input,      # $2 — for exact/prefix scoring
+        )
 
-    db_partners = [dict(row) for row in rows]
-    logger.info("%sDiscovery: DB returned %d partners.", prefix, len(db_partners))
+    # ── Step 2: Auto-detect mode based on name match results ──────────────
+    if name_rows:
+        # Found partners matching this as a name — use name mode
+        db_partners  = [dict(row) for row in name_rows]
+        search_mode  = "name"
+        logger.info(
+            "%sDiscovery: NAME MODE — %r matched %d partner(s) by name.",
+            prefix, raw_input, len(db_partners),
+        )
+        # In name mode: no Apollo prospecting, return immediately
+        return {
+            "discovered_partners": db_partners,
+            "search_mode": search_mode,
+        }
 
-    # ── Step 2: Apollo prospecting gap-fill ───────────────────────────────
+    # ── Step 3: No name match — fall through to category search ───────────
+    search_mode = "category"
+    logger.info(
+        "%sDiscovery: No name match for %r — falling through to CATEGORY MODE.",
+        prefix, raw_input,
+    )
+
+    async with pool.acquire() as conn:
+        cat_rows = await conn.fetch(
+            _CATEGORY_SEARCH_QUERY,
+            STATUSES_TO_ENRICH,  # $1
+            raw_input,           # $2 — exact tag match
+            like_pattern,        # $3 — ILIKE pattern
+        )
+
+    db_partners = [dict(row) for row in cat_rows]
+    logger.info(
+        "%sDiscovery: CATEGORY MODE — %r matched %d partner(s).",
+        prefix, raw_input, len(db_partners),
+    )
+
+    # ── Step 4: Apollo prospecting gap-fill (category mode only) ──────────
     apollo_partners: list[dict] = []
 
     if len(db_partners) < _APOLLO_MIN_THRESHOLD:
         logger.info(
             "%sDiscovery: DB results (%d) below threshold (%d) — running Apollo prospecting for %r.",
-            prefix, len(db_partners), _APOLLO_MIN_THRESHOLD, input_category,
+            prefix, len(db_partners), _APOLLO_MIN_THRESHOLD, raw_input,
         )
         try:
             apollo_partners = await prospect_apollo(
-                category=input_category,
+                category=raw_input,
                 region="UAE",
                 max_companies=_APOLLO_MAX_PROSPECT,
                 run_id=run_id,
@@ -133,7 +223,7 @@ async def discovery_node(state: GraphState) -> dict:
             logger.warning("%sDiscovery: Apollo prospecting failed: %s", prefix, exc)
             apollo_partners = []
 
-        # ── Step 3: Upsert Apollo partners to DB ──────────────────────────
+        # ── Step 5: Upsert Apollo partners to DB ──────────────────────────
         if apollo_partners:
             try:
                 async with pool.acquire() as conn:
@@ -142,8 +232,8 @@ async def discovery_node(state: GraphState) -> dict:
                         await conn.fetchrow(
                             _UPSERT_APOLLO_PARTNER,
                             p.get("partner_name", ""),
-                            p.get("category", input_category),
-                            p.get("subcategories", input_category),
+                            p.get("category", raw_input),
+                            p.get("subcategories", raw_input),
                             p.get("website", ""),
                             "Yet to Start",
                             p.get("digitisation", "Semi-digitised"),
@@ -161,7 +251,7 @@ async def discovery_node(state: GraphState) -> dict:
             except Exception as exc:
                 logger.error("%sDiscovery: Apollo upsert failed: %s", prefix, exc)
 
-    # ── Step 4: Merge + deduplicate ───────────────────────────────────────
+    # ── Step 6: Merge + deduplicate ───────────────────────────────────────
     seen_names: set[str] = {p.get("partner_name", "").lower() for p in db_partners}
     new_from_apollo = []
 
@@ -174,8 +264,11 @@ async def discovery_node(state: GraphState) -> dict:
     discovered = db_partners + new_from_apollo
 
     logger.info(
-        "%sDiscovery: total %d partners (%d DB + %d new from Apollo).",
-        prefix, len(discovered), len(db_partners), len(new_from_apollo),
+        "%sDiscovery: total %d partners (%d DB + %d new from Apollo). mode=%s",
+        prefix, len(discovered), len(db_partners), len(new_from_apollo), search_mode,
     )
 
-    return {"discovered_partners": discovered}
+    return {
+        "discovered_partners": discovered,
+        "search_mode": search_mode,
+    }

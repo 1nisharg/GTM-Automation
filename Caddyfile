@@ -1,0 +1,16 @@
+# Caddyfile
+# ----------
+# Replace "yourdomain.com" below with your real domain (must have its DNS
+# A record pointed at this server's public IP first, or Caddy can't get a
+# TLS certificate for it).
+#
+# Caddy automatically handles:
+#   - TLS certificate issuance (Let's Encrypt) and renewal
+#   - WebSocket upgrade (no special config needed — reverse_proxy handles it)
+#
+# After editing, restart just this service to pick up changes:
+#   docker compose restart caddy
+
+yourdomain.com {
+    reverse_proxy backend:8000
+}

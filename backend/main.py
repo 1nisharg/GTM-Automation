@@ -8,7 +8,7 @@ Run from the project root with:
 """
 import sys
 from pathlib import Path
-
+import asyncio
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 import logging
@@ -21,12 +21,14 @@ from db.connection import close_pool, init_pool
 from db.db_init import run_startup_migrations
 from voice_agent.tunnel import start_tunnel, stop_tunnel
 from voice_agent.engine import router as voice_agent_router
+from voice_agent.ozonetel_stream import router as ozonetel_router
 from backend.api.pipeline import router as pipeline_router
 from backend.api.partners import router as partners_router
 from backend.api.outreach import router as outreach_router
 from backend.api.analytics import router as analytics_router
 from backend.api.discovery import router as discovery_router
 from backend.api.enrichment import router as enrichment_router
+from nodes.outreach.outreach_node import launch_outreach_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +61,10 @@ async def lifespan(app: FastAPI):
         await run_startup_migrations()
     except Exception as exc:
         logger.warning("Startup: migration/seed failed: %s", exc)
+
+    # ── Outreach sequence scheduler (background task) ────────────────────
+    logger.info("Startup: launching outreach sequence scheduler…")
+    asyncio.create_task(launch_outreach_scheduler())
 
     # ── ngrok tunnel (voice agent webhooks) ────────────────────────────────
     logger.info("Startup: starting voice agent ngrok tunnel…")
@@ -126,6 +132,7 @@ app.include_router(analytics_router,   prefix="/api/analytics",   tags=["Analyti
 app.include_router(discovery_router,   prefix="/api/discovery",   tags=["Discovery"])
 app.include_router(enrichment_router,  prefix="/api/enrichment",  tags=["Enrichment"])
 app.include_router(voice_agent_router,                            tags=["Voice Agent"])
+app.include_router(ozonetel_router,                                tags=["Ozonetel Voice Agent"])
 
 
 # ---------------------------------------------------------------------------

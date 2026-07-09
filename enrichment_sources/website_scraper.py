@@ -56,22 +56,63 @@ _CONTACT_PATHS = [
 ]
 
 # Regex patterns
-_EMAIL_RE    = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-_PHONE_RE    = re.compile(
-    r"(?:\+?\d[\d\s\-\(\)]{7,}\d)"  # international formats
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+# Phone regex — strict enough to avoid dates, zip codes, reference numbers.
+# Requires a + prefix OR at least 2 consecutive digits to start, then
+# allows separators. Minimum 8 DIGITS (not chars) enforced in _extract_phones.
+_PHONE_RE = re.compile(
+    r"(?:"
+    r"\+\d[\d\s\-\.\(\)]{6,20}\d"   # E.164 style: must start with +
+    r"|"
+    r"\b(?:00\d{1,3}|0\d{1,2})[\d\s\-\.\(\)]{5,18}\d"  # local intl: 00971 or 04...
+    r")"
 )
 _LINKEDIN_RE = re.compile(
     r"https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\%]+"
 )
 
-# Generic email prefixes — we can do better than these from Hunter already
+# Generic email prefixes — never use these for outreach.
+# Expanded to include location prefixes, department names, and role-based
+# addresses that appear personal but go to shared inboxes.
 _GENERIC_PREFIXES = {
+    # Standard catch-all
     "info", "contact", "hello", "support", "admin",
-    "sales", "enquiries", "enquiry", "booking", "bookings",
+    "enquiries", "enquiry", "booking", "bookings",
     "reservations", "reception", "office", "team", "mail",
     "general", "service", "services", "help", "noreply",
-    "no-reply", "donotreply",
+    "no-reply", "donotreply", "do-not-reply", "no_reply",
+    # Sales / marketing shared inboxes
+    "sales", "marketing", "pr", "media", "press", "events",
+    "promotions", "deals", "offers", "partnerships", "partner",
+    # Operations shared inboxes
+    "operations", "ops", "billing", "finance", "accounts",
+    "procurement", "purchasing", "contracts", "legal",
+    "hr", "recruitment", "careers", "jobs",
+    # Hospitality / tourism specific
+    "concierge", "guestrelations", "guestservices", "guest",
+    "experiences", "activities", "tours", "reservations",
+    "checkin", "checkout", "frontdesk", "front.desk",
+    "complaints", "feedback", "reviews",
+    # Location-prefixed (dubai@, uae@, abudhabi@, etc.)
+    "dubai", "uae", "abu", "abudhabi", "sharjah", "ajman",
+    "rak", "fujairah", "alain", "ae", "gcc", "me",
+    "middleeast", "gulf", "ksa", "riyadh", "doha", "qatar",
+    # Generic department inboxes
+    "webmaster", "web", "digital", "online", "website",
+    "tech", "it", "helpdesk", "newsletter", "subscribe",
+    "unsubscribe", "postmaster", "abuse", "spam",
+    # Common patterns seen in UAE partner bounces
+    "mail", "email", "contactus", "getintouch",
+    "reach", "connect", "query", "queries",
 }
+
+# Additional check: prefixes that are SINGLE geographic words or short codes
+_GENERIC_PATTERNS = (
+    r"^(info|contact|hello|support|admin|dubai|uae|ae)[\.\-_]",  # prefix + separator
+    r"^\d+$",  # pure numeric
+    r"^.{1,2}$",  # too short to be a real name
+)
 
 _HEADERS = {
     "User-Agent": (
@@ -86,8 +127,20 @@ _HEADERS = {
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _is_generic_email(email: str) -> bool:
+    """Return True if this email is a shared/generic inbox — not a real person."""
+    import re as _re
     prefix = email.split("@")[0].lower().strip()
-    return prefix in _GENERIC_PREFIXES
+    # Exact match against known generic prefixes
+    if prefix in _GENERIC_PREFIXES:
+        return True
+    # Pattern checks for short codes, numeric, or prefixed generics
+    for pattern in _GENERIC_PATTERNS:
+        if _re.match(pattern, prefix):
+            return True
+    # If prefix contains no letters at all — not a real person
+    if not any(c.isalpha() for c in prefix):
+        return True
+    return False
 
 
 def _clean_domain(raw: str) -> str:
@@ -112,17 +165,79 @@ def _extract_emails(text: str, prefer_personal: bool = True) -> list[str]:
     return found
 
 
+# UAE and common GCC country codes — used to validate scraped phone numbers
+_UAE_COUNTRY_CODES = {"971", "968", "966", "974", "965", "973"}  # UAE, Oman, KSA, Qatar, Kuwait, Bahrain
+
+def _is_valid_phone_number(raw: str) -> bool:
+    """
+    Return True only if this string is a plausible real phone number.
+    Rejects: dates (2024-01-01), zip codes, reference numbers, short codes,
+    numbers with too many repeated digits, pure sequences.
+    """
+    digits = re.sub(r"\D", "", raw)
+
+    # Must have 7–15 digits (E.164 max is 15)
+    if not (7 <= len(digits) <= 15):
+        return False
+
+    # Must have at least 8 digits for international numbers
+    if len(digits) < 8:
+        return False
+
+    # Reject if looks like a year (4 digits starting with 19 or 20)
+    if len(digits) == 4 and digits[:2] in ("19", "20"):
+        return False
+
+    # Reject pure sequences (1234567, 0000000)
+    if digits == digits[0] * len(digits):
+        return False
+    if digits in ("1234567", "12345678", "123456789", "0123456789"):
+        return False
+
+    # Reject if more than 60% of digits are the same character (spam/placeholder)
+    from collections import Counter
+    most_common_count = Counter(digits).most_common(1)[0][1]
+    if most_common_count / len(digits) > 0.6:
+        return False
+
+    # Accept UAE/GCC numbers: start with +971, 00971, or 0 (local UAE)
+    # Also accept any number with 10+ digits (likely international)
+    if raw.lstrip().startswith("+") or raw.lstrip().startswith("00"):
+        return True
+    if len(digits) >= 10:
+        return True
+    # Local UAE numbers: 7–9 digits starting with 0 or 5/4/2/3/6/7/8/9
+    if len(digits) in (8, 9) and digits[0] in "02345689":
+        return True
+
+    return False
+
+
+def _normalise_phone(raw: str) -> str:
+    """
+    Normalise a scraped phone number to E.164-ish format.
+    Strips excess whitespace and standardises separators.
+    Does NOT blindly add +971 — only normalises what's there.
+    """
+    # Remove everything except digits, +, spaces, hyphens, parens
+    cleaned = re.sub(r"[^\d+\s\-\(\)]", "", raw).strip()
+    # Collapse multiple spaces/separators
+    cleaned = re.sub(r"[\s\-]{2,}", "-", cleaned)
+    return cleaned
+
+
 def _extract_phones(text: str) -> list[str]:
-    """Extract all phone numbers from text, cleaned up."""
+    """
+    Extract valid phone numbers from page text.
+    Validates each match to reject dates, reference numbers, and short codes.
+    """
     raw_phones = _PHONE_RE.findall(text)
     cleaned = []
     for p in raw_phones:
         p = p.strip()
-        # Filter out numbers that are too short or look like dates/zip codes
-        digits = re.sub(r"\D", "", p)
-        if len(digits) >= 7:
-            cleaned.append(p)
-    return list(set(cleaned))
+        if _is_valid_phone_number(p):
+            cleaned.append(_normalise_phone(p))
+    return list(dict.fromkeys(cleaned))  # dedupe preserving order
 
 
 def _extract_linkedin(text: str) -> str | None:

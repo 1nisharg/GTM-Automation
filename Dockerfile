@@ -27,5 +27,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # overridden at runtime — so you rarely need to rebuild for code changes.
 COPY . .
 
+# Backend service (docker-compose.yml's `backend`) serves on this port.
+EXPOSE 8000
+
 # ── Default command ──────────────────────────────────────────────────────────
 CMD ["python", "graph.py"]

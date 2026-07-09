@@ -63,6 +63,7 @@ export default function PipelineRunnerPage() {
   const [categories, setCategories]   = useState<string[]>([]);
   const [showSuggest, setShowSuggest] = useState(false);
   const [running, setRunning]         = useState(false);
+  const [searchMode, setSearchMode]   = useState<"subcategory" | "name">("subcategory");
   const [stages, setStages]           = useState<Record<string, StageState>>({
     discovery: { status: "idle" },
     enrichment: { status: "idle" },
@@ -131,10 +132,13 @@ export default function PipelineRunnerPage() {
     abortRef.current = new AbortController();
 
     try {
+      const payload = searchMode === "subcategory"
+        ? { input_category: category.trim() }
+        : { input_partner_name: category.trim() };
       const res = await fetch(`${API_BASE}/api/pipeline/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input_category: category.trim() }),
+        body: JSON.stringify(payload),
         signal: abortRef.current.signal,
       });
 
@@ -226,26 +230,64 @@ export default function PipelineRunnerPage() {
 
       {/* ── Input + Run ─────────────────────────────────────────── */}
       <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-        <label className="text-xs font-bold text-muted-foreground uppercase tracking-widest block mb-3">
-          Partner Category
-        </label>
+
+        {/* Mode toggle */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+            Search by
+          </span>
+          <div className="flex rounded-lg border border-border overflow-hidden text-xs font-semibold">
+            <button
+              onClick={() => { setSearchMode("subcategory"); setCategory(""); }}
+              disabled={running}
+              className={`px-4 py-1.5 transition-colors ${
+                searchMode === "subcategory"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              Subcategory
+            </button>
+            <button
+              onClick={() => { setSearchMode("name"); setCategory(""); }}
+              disabled={running}
+              className={`px-4 py-1.5 transition-colors border-l border-border ${
+                searchMode === "name"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              Partner Name
+            </button>
+          </div>
+        </div>
+
         <div className="flex gap-3">
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
               id="category-input"
+              name="category-input"
               type="text"
               value={category}
-              onChange={e => { setCategory(e.target.value); setShowSuggest(true); }}
-              onFocus={() => setShowSuggest(true)}
+              onChange={e => { setCategory(e.target.value); setShowSuggest(searchMode === "subcategory"); }}
+              onFocus={() => { if (searchMode === "subcategory") setShowSuggest(true); }}
               onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
               onKeyDown={e => e.key === "Enter" && handleRun()}
-              placeholder='e.g. "Adventure & Extreme Sports"'
+              placeholder={
+                searchMode === "subcategory"
+                  ? 'e.g. "Adventure & Extreme Sports"'
+                  : 'e.g. "Adventure HQ"'
+              }
               className="w-full bg-background border border-border rounded-xl pl-9 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50 transition-all"
               disabled={running}
+              autoComplete="off"
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore="true"
             />
-            {/* Autocomplete */}
-            {showSuggest && filteredSuggestions.length > 0 && (
+            {/* Autocomplete — only for subcategory mode */}
+            {searchMode === "subcategory" && showSuggest && filteredSuggestions.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
                 {filteredSuggestions.map(s => (
                   <button

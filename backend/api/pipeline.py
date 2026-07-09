@@ -61,7 +61,8 @@ _pipeline_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PIPELINES)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class PipelineRunRequest(BaseModel):
-    input_category: str
+    input_category:     str = ""
+    input_partner_name: str = ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -85,6 +86,7 @@ async def _run_pipeline_stream(input_category: str, run_id: str) -> AsyncGenerat
     """
     state: dict = {
         "input_category": input_category.strip(),
+        "search_mode": "",          # filled by discovery_node: "name" | "category"
         "run_id": run_id,
         "discovered_partners": [],
         "enriched_partners": [],
@@ -104,10 +106,16 @@ async def _run_pipeline_stream(input_category: str, run_id: str) -> AsyncGenerat
         state.update(discovery_result or {})
         discovered = state.get("discovered_partners", [])
         elapsed = round(time.monotonic() - t0, 2)
-        logger.info("[%s] ✓ DISCOVERY: %d partners found in %.2fs.", run_id, len(discovered), elapsed)
+        logger.info("[%s] ✓ DISCOVERY: %d partners found in %.2fs (mode=%s).", run_id, len(discovered), elapsed, state.get("search_mode", "?"))
+        search_mode = state.get("search_mode", "category")
+        logger.info("[%s] ✓ DISCOVERY: mode=%s", run_id, search_mode)
         yield _sse(run_id, {
             "stage": "discovery", "status": "done", "elapsed_s": elapsed,
-            "data": {"count": len(discovered), "partners": _safe_partners(discovered)},
+            "data": {
+                "count": len(discovered),
+                "search_mode": search_mode,
+                "partners": _safe_partners(discovered),
+            },
         })
     except Exception as exc:
         logger.exception("[%s] ✗ DISCOVERY failed: %s", run_id, exc)
@@ -170,6 +178,34 @@ async def _run_pipeline_stream(input_category: str, run_id: str) -> AsyncGenerat
 
     await asyncio.sleep(0)
 
+    # ── Credit summary ─────────────────────────────────────────────────────────
+    # Count API calls made this run from apollo_usage + estimate Hunter/Tavily
+    # from enriched partner count (1 Hunter call + 1 Tavily call per partner).
+    enriched_count = len(state.get("enriched_partners", []))
+    apollo_credits = 0
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COALESCE(SUM(credits_used), 0) AS total FROM apollo_usage WHERE run_id = $1",
+                run_id,
+            )
+            apollo_credits = int(row["total"]) if row else 0
+    except Exception:
+        pass  # non-critical
+
+    hunter_calls  = enriched_count          # 1 domain_search per partner
+    tavily_calls  = enriched_count          # 1 linkedin_search per partner
+    total_credits = apollo_credits + hunter_calls + tavily_calls
+
+    credit_summary = (
+        f"Apollo: {apollo_credits} credits  |  "
+        f"Hunter: ~{hunter_calls} requests  |  "
+        f"Tavily: ~{tavily_calls} searches  |  "
+        f"Total: ~{total_credits} API calls"
+    )
+    logger.info("[%s] 💳 CREDITS USED THIS RUN — %s", run_id, credit_summary)
+
     # ── Complete ───────────────────────────────────────────────────────────────
     total_elapsed = round(time.monotonic() - t_total, 2)
     logger.info(
@@ -184,8 +220,15 @@ async def _run_pipeline_stream(input_category: str, run_id: str) -> AsyncGenerat
         "data": {
             "input_category":   input_category,
             "discovered_count": len(state.get("discovered_partners", [])),
-            "enriched_count":   len(state.get("enriched_partners", [])),
+            "enriched_count":   enriched_count,
             "outreach_count":   len(state.get("outreach_results", [])) if isinstance(state.get("outreach_results"), list) else 0,
+            "credits_used": {
+                "apollo":  apollo_credits,
+                "hunter":  hunter_calls,
+                "tavily":  tavily_calls,
+                "total":   total_credits,
+                "summary": credit_summary,
+            },
         },
     })
 
@@ -233,20 +276,26 @@ def _compute_fill_stats(partners: list) -> dict:
 @router.post("/run")
 async def run_pipeline(req: PipelineRunRequest):
     """
-    Trigger the full pipeline for a given category.
+    Trigger the full pipeline for a given category or partner name.
+    Accepts either:
+      { "input_category": "Adventure & Extreme Sports" }   ← subcategory mode
+      { "input_partner_name": "Adventure HQ" }             ← name mode
     Returns a Server-Sent Event stream.
 
     Concurrent pipeline runs are capped at MAX_CONCURRENT_PIPELINES (default 5).
     Requests beyond the cap get HTTP 503 immediately.
     """
-    if not req.input_category.strip():
-        raise HTTPException(status_code=400, detail="input_category must not be empty")
+    # Resolve which field was sent — name takes priority if both provided
+    resolved_input = (req.input_partner_name or req.input_category or "").strip()
+
+    if not resolved_input:
+        raise HTTPException(status_code=400, detail="Provide either input_category or input_partner_name")
 
     # Non-blocking check — return 503 immediately if at capacity
     if _pipeline_semaphore._value == 0:  # type: ignore[attr-defined]
         logger.warning(
-            "Pipeline capacity reached (%d slots full). Rejecting: category=%r.",
-            _MAX_CONCURRENT_PIPELINES, req.input_category,
+            "Pipeline capacity reached (%d slots full). Rejecting: input=%r.",
+            _MAX_CONCURRENT_PIPELINES, resolved_input,
         )
         raise HTTPException(
             status_code=503,
@@ -257,13 +306,13 @@ async def run_pipeline(req: PipelineRunRequest):
     run_id = uuid.uuid4().hex[:8]
     active = _MAX_CONCURRENT_PIPELINES - _pipeline_semaphore._value  # type: ignore
     logger.info(
-        "New pipeline request: run_id=%s category=%r (slot %d/%d)",
-        run_id, req.input_category, active + 1, _MAX_CONCURRENT_PIPELINES,
+        "New pipeline request: run_id=%s input=%r (slot %d/%d)",
+        run_id, resolved_input, active + 1, _MAX_CONCURRENT_PIPELINES,
     )
 
     async def _guarded_stream():
         async with _pipeline_semaphore:
-            async for chunk in _run_pipeline_stream(req.input_category, run_id):
+            async for chunk in _run_pipeline_stream(resolved_input, run_id):
                 yield chunk
 
     return StreamingResponse(

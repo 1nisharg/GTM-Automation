@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aarna — Supply Lead Agent Flow v5</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#F2F7F4;--surface:#FFFFFF;--forest:#0D3D22;
+  --green:#0F7B3F;--greena:#18A558;--greenl:#E6F6EE;--green2:#D1FAE5;
+  --amber:#92510A;--amberl:#FEF3E2;--amberv:#F59E0B;
+  --red:#9B1C1C;--redl:#FEF2F2;
+  --blue:#1447A6;--bluel:#EFF4FF;
+  --teal:#0E7490;--teall:#ECFEFF;
+  --purple:#5B21B6;--purplel:#F5F3FF;
+  --pink:#9D174D;--pinkl:#FDF2F8;
+  --gray:#374151;--grayl:#F9FAFB;
+  --border:#D1E8DA;--border2:#A7C9B3;
+  --text:#111827;--text2:#374151;--text3:#6B7280;--text4:#9CA3AF;
+}
+body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+/* HEADER */
+.header{background:var(--forest);padding:24px 44px 20px;display:flex;align-items:flex-end;justify-content:space-between;gap:32px}
+.h-eye{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;letter-spacing:2.5px;text-transform:uppercase;color:var(--greena);margin-bottom:5px}
+.h-title{font-size:22px;font-weight:600;color:#FFF;letter-spacing:-0.3px;margin-bottom:3px}
+.h-sub{font-size:11px;color:rgba(255,255,255,0.38);font-weight:300;margin-bottom:8px}
+.st-row{display:flex;gap:6px}
+.st-b{display:flex;align-items:center;gap:5px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:4px;padding:3px 9px;font-size:9.5px;color:rgba(255,255,255,0.55)}
+.st-dot{width:6px;height:6px;border-radius:50%}
+.io-strip{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.io-p{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:7px 13px;text-align:center}
+.io-l{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.28);margin-bottom:3px}
+.io-v{font-size:11px;font-weight:500;color:rgba(255,255,255,0.8);white-space:nowrap}
+.io-arr{font-size:14px;color:rgba(255,255,255,0.18)}
+
+/* LAYOUT */
+.body{display:flex;height:calc(100vh - 106px);overflow:hidden}
+
+/* SIDEBAR */
+.sidebar{width:244px;min-width:244px;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:12px 0}
+.sb-sec{padding:5px 14px 3px;font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text4)}
+.sb-item{display:flex;align-items:center;gap:9px;padding:8px 13px;cursor:pointer;transition:background 0.12s;border-left:2px solid transparent}
+.sb-item:hover{background:var(--bg)}
+.sb-item.active{background:var(--greenl);border-left-color:var(--greena)}
+.sb-item.active .sb-t{color:var(--green)}
+.sb-item.active .sb-n{color:var(--green)}
+.sb-n{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--text4);min-width:18px}
+.sb-ic{width:24px;height:24px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.sb-t{font-size:11px;font-weight:500;color:var(--text);line-height:1.3}
+.sb-s{font-size:9px;color:var(--text4);margin-top:1px}
+.sb-div{height:1px;background:var(--border);margin:5px 13px}
+
+/* branch item in sidebar */
+.sb-branch{display:flex;align-items:center;gap:9px;padding:8px 13px;background:#FFFBEB;border-left:2px solid var(--amberv);cursor:pointer}
+.sb-branch:hover{background:var(--amberl)}
+.sb-branch .sb-t{color:var(--amber)}
+.sb-branch .sb-n{color:var(--amberv)}
+
+/* flow bar */
+.flow-bar{padding:10px 13px;border-top:1px solid var(--border);margin-top:6px}
+.fb-lbl{font-family:'IBM Plex Mono',monospace;font-size:7.5px;letter-spacing:1px;text-transform:uppercase;color:var(--text4);margin-bottom:7px}
+.fb-steps{display:flex;flex-direction:column;gap:2px}
+.fb-step{display:flex;align-items:center;gap:6px;font-size:9px;color:var(--text3);padding:2px 5px;border-radius:3px}
+.fb-step.on{background:var(--greenl);color:var(--green);font-weight:500}
+.fb-step.branch-step{background:var(--amberl);color:var(--amber);font-weight:500}
+.fb-dot{width:5px;height:5px;border-radius:50%;background:var(--border2);flex-shrink:0}
+.fb-step.on .fb-dot{background:var(--greena)}
+.fb-step.branch-step .fb-dot{background:var(--amberv)}
+.fb-arr{font-size:8px;color:var(--text4);padding-left:10px}
+
+/* MAIN */
+.main{flex:1;overflow-y:auto;padding:22px 30px}
+
+/* SECTION LABEL */
+.section-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:var(--text4);margin-bottom:8px;margin-top:4px;padding-left:2px;display:flex;align-items:center;gap:8px}
+.sl-line{flex:1;height:1px;background:var(--border)}
+
+/* STAGE CARD */
+.stage-card{background:var(--surface);border:1px solid var(--border);border-radius:9px;margin-bottom:6px;overflow:hidden;transition:box-shadow 0.15s}
+.stage-card:hover{box-shadow:0 2px 10px rgba(0,0,0,0.05)}
+.stage-card.open{box-shadow:0 3px 16px rgba(0,0,0,0.07);border-color:var(--border2)}
+
+/* BRANCH CARD */
+.branch-card{background:var(--surface);border:1.5px dashed var(--amberv);border-radius:9px;margin-bottom:6px;overflow:hidden}
+.branch-card .stage-hdr{background:#FFFCF5}
+.branch-card .stage-hdr:hover{background:var(--amberl)}
+.branch-card.open{border-style:solid}
+
+.stage-hdr{display:flex;align-items:center;gap:10px;padding:12px 15px;cursor:pointer;user-select:none}
+.stage-hdr:hover{background:#FAFCFB}
+.s-num{font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;color:var(--text4);min-width:20px}
+.s-ic{width:29px;height:29px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.s-info{flex:1;min-width:0}
+.s-title{font-size:12px;font-weight:600;color:var(--text);margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-tag{font-size:9.5px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-chs{display:flex;gap:3px;flex-shrink:0}
+.ch{font-family:'IBM Plex Mono',monospace;font-size:7.5px;padding:2px 5px;border-radius:3px;background:var(--bg);color:var(--text3);border:1px solid var(--border)}
+.chev{font-size:11px;color:var(--text4);transition:transform 0.2s;margin-left:3px}
+.stage-card.open .chev,.branch-card.open .chev{transform:rotate(90deg)}
+
+.stage-body{display:none;border-top:1px solid var(--border)}
+.stage-card.open .stage-body,.branch-card.open .stage-body{display:block}
+
+/* SNOTE */
+.snote{display:flex;align-items:flex-start;gap:7px;padding:8px 15px;background:var(--green2);border-bottom:1px solid var(--border);font-size:10px;color:var(--green);line-height:1.55}
+.sn-d{width:5px;height:5px;border-radius:50%;background:var(--greena);flex-shrink:0;margin-top:3px}
+.anote{display:flex;align-items:flex-start;gap:7px;padding:8px 15px;background:var(--amberl);border-bottom:1px solid #FCD34D;font-size:10px;color:var(--amber);line-height:1.55}
+.an-d{width:5px;height:5px;border-radius:50%;background:var(--amberv);flex-shrink:0;margin-top:3px}
+
+/* TASKS */
+.tasks-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1px;background:var(--border)}
+.task{background:var(--surface);padding:13px 15px}
+.t-title{font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:center;gap:5px}
+.tdot{width:4px;height:4px;border-radius:50%;flex-shrink:0}
+.t-desc{font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:6px;font-weight:300}
+.pills{display:flex;flex-wrap:wrap;gap:3px}
+.pill{font-family:'IBM Plex Mono',monospace;font-size:8px;padding:2px 6px;border-radius:3px;border:1px solid}
+
+/* SCRIPT BLOCK */
+.script-block{padding:14px 15px;background:var(--grayl);border-bottom:1px solid var(--border)}
+.script-label{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--text4);margin-bottom:8px}
+.script-item{margin-bottom:10px;border-left:2px solid var(--border2);padding-left:10px}
+.script-q{font-size:10px;font-weight:600;color:var(--text);margin-bottom:3px}
+.script-a{font-size:10px;color:var(--text3);line-height:1.6;font-weight:300;font-style:italic}
+.script-says{font-size:10px;color:var(--green);font-weight:500;margin-bottom:3px;display:flex;align-items:center;gap:5px}
+
+/* QA BLOCK */
+.qa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1px;background:var(--border)}
+.qa-item{background:var(--surface);padding:12px 15px}
+.qa-q{font-size:10px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:flex-start;gap:5px}
+.qa-qlbl{font-family:'IBM Plex Mono',monospace;font-size:8px;background:var(--redl);color:var(--red);padding:1px 5px;border-radius:3px;flex-shrink:0;margin-top:1px}
+.qa-a{font-size:10px;color:var(--text3);line-height:1.6;display:flex;align-items:flex-start;gap:5px}
+.qa-albl{font-family:'IBM Plex Mono',monospace;font-size:8px;background:var(--greenl);color:var(--green);padding:1px 5px;border-radius:3px;flex-shrink:0;margin-top:1px}
+
+/* ENTRY GRID */
+.entry-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--border)}
+.entry-box{background:var(--surface);padding:13px 15px}
+.e-icon{font-size:16px;margin-bottom:5px}
+.e-title{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px}
+.e-desc{font-size:10px;color:var(--text3);line-height:1.55}
+
+/* SCORE GRID */
+.score-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border)}
+.score-box{background:var(--surface);padding:13px 15px}
+.sc-tier{font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:500;letter-spacing:1px;text-transform:uppercase;padding:2px 7px;border-radius:3px;display:inline-block;margin-bottom:7px}
+.sc-title{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px}
+.sc-desc{font-size:10px;color:var(--text3);line-height:1.55;margin-bottom:6px}
+.sc-act{font-size:9.5px;font-weight:500;padding:3px 8px;border-radius:3px;display:inline-block}
+
+/* ROUTING */
+.routing-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+.route-box{background:var(--surface);padding:14px 15px}
+.r-label{font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:500;letter-spacing:1px;text-transform:uppercase;padding:2px 8px;border-radius:3px;display:inline-flex;align-items:center;gap:5px;margin-bottom:9px}
+.r-title{font-size:12px;font-weight:600;color:var(--text);margin-bottom:3px}
+.r-sub{font-size:10px;color:var(--text3);margin-bottom:8px;line-height:1.5}
+.r-crit{display:flex;flex-direction:column;gap:3px}
+.rc{font-size:9.5px;color:var(--text2);display:flex;align-items:center;gap:6px}
+
+/* ONBOARDING STEPS */
+.ob-steps{display:flex;flex-direction:column;gap:1px;background:var(--border)}
+.ob-step{background:var(--surface);padding:12px 15px;display:flex;align-items:flex-start;gap:12px}
+.ob-num{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;color:var(--text4);min-width:22px;margin-top:1px}
+.ob-content{}
+.ob-title{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px}
+.ob-desc{font-size:10px;color:var(--text3);line-height:1.6;margin-bottom:5px}
+
+/* OUTPUT BAR */
+.out-bar{display:flex;align-items:center;gap:10px;padding:10px 15px;border-top:1px solid var(--border)}
+.out-lbl{font-family:'IBM Plex Mono',monospace;font-size:7.5px;font-weight:500;letter-spacing:1px;text-transform:uppercase;padding:3px 7px;border-radius:3px;flex-shrink:0;white-space:nowrap}
+.out-txt{font-size:10px;color:var(--text2);line-height:1.5}
+
+/* BRANCH SIGNAL */
+.branch-signal{background:var(--amberl);border:1.5px dashed var(--amberv);border-radius:8px;padding:12px 15px;margin:8px 0;display:flex;align-items:flex-start;gap:10px}
+.bs-icon{font-size:16px;flex-shrink:0}
+.bs-label{font-family:'IBM Plex Mono',monospace;font-size:8px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--amber);margin-bottom:3px}
+.bs-text{font-size:10px;color:var(--amber);line-height:1.6}
+
+/* LIVE CARD */
+.live-card{background:var(--greenl);border:1.5px solid var(--greena);border-radius:9px;padding:16px 20px;display:flex;align-items:center;gap:14px;margin-top:4px}
+.live-check{width:36px;height:36px;border-radius:50%;background:var(--greena);color:white;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.live-lbl{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--green);margin-bottom:3px}
+.live-title{font-size:13px;font-weight:600;color:var(--green);margin-bottom:2px}
+.live-sub{font-size:10px;color:var(--greena);font-weight:300}
+
+/* COLOUR SETS */
+.c-purple{--ic:var(--purplel);--dc:var(--purple);--pc-bg:var(--purplel);--pc-bd:#C4B5FD;--pc-t:#5B21B6;--ob:var(--purplel)}
+.c-teal  {--ic:var(--teall);  --dc:var(--teal);  --pc-bg:var(--teall);  --pc-bd:#67E8F9;--pc-t:#0E7490;--ob:var(--teall)  }
+.c-amber {--ic:var(--amberl); --dc:var(--amber); --pc-bg:var(--amberl); --pc-bd:#FCD34D;--pc-t:#92510A;--ob:var(--amberl) }
+.c-green {--ic:var(--greenl); --dc:var(--green); --pc-bg:var(--greenl); --pc-bd:#6EE7B7;--pc-t:#065F46;--ob:var(--greenl) }
+.c-red   {--ic:var(--redl);   --dc:var(--red);   --pc-bg:var(--redl);   --pc-bd:#FCA5A5;--pc-t:#991B1B;--ob:var(--redl)   }
+.c-blue  {--ic:var(--bluel);  --dc:var(--blue);  --pc-bg:var(--bluel);  --pc-bd:#93C5FD;--pc-t:#1D4ED8;--ob:var(--bluel)  }
+.c-gray  {--ic:var(--grayl);  --dc:var(--gray);  --pc-bg:var(--grayl);  --pc-bd:#D1D5DB;--pc-t:#374151;--ob:var(--grayl)  }
+
+[class*="c-"] .s-ic,[class*="c-"] .sb-ic{background:var(--ic)}
+[class*="c-"] .tdot{background:var(--dc)}
+[class*="c-"] .pill{background:var(--pc-bg);border-color:var(--pc-bd);color:var(--pc-t)}
+[class*="c-"] .out-bar{background:var(--ob);border-top-color:var(--pc-bd)}
+[class*="c-"] .out-lbl{background:var(--dc);color:white}
+
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="h-eye">Aarna · Supply Partner Pipeline</div>
+    <div class="h-title">Aarna Supply Lead Agent Flow</div>
+    <div class="h-sub">Discovery → Contact ID → Qualify → Score → Outreach → Onboard → Live · AI-led end to end</div>
+    <div class="st-row">
+      <div class="st-b"><div class="st-dot" style="background:#3B82F6"></div>Digitised — Gautam's team</div>
+      <div class="st-b"><div class="st-dot" style="background:#EC4899"></div>Semi + Undigitised — Michelle's team</div>
+      <div class="st-b"><div class="st-dot" style="background:#F59E0B"></div>Human branch — Gautam · Michelle · Sneden · Shadaab · Neerzari · Nikhil</div>
+    </div>
+  </div>
+  <div class="io-strip">
+    <div class="io-p"><div class="io-l">Input</div><div class="io-v">Partner name or lead</div></div>
+    <div class="io-arr">→</div>
+    <div class="io-p"><div class="io-l">Output</div><div class="io-v">Live on Aarna · Flows to Abhee + MIRAEE</div></div>
+  </div>
+</div>
+
+<div class="body">
+  <div class="sidebar">
+    <div class="sb-sec">Main Flow</div>
+    <div id="sb-main"></div>
+    <div class="sb-div"></div>
+    <div class="sb-sec">Human Branch</div>
+    <div id="sb-branch"></div>
+    <div class="flow-bar">
+      <div class="fb-lbl">Pipeline</div>
+      <div class="fb-steps" id="fb-steps"></div>
+    </div>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+
+<script>
+// ── DATA ─────────────────────────────────────────────────────────
+
+const mainStages = [
+  {
+    id:'s0', num:'01', color:'c-purple', icon:'🔭',
+    title:'Aarna Partner Discovery',
+    tag:'How we find out a partner exists',
+    channels:['Bot','WhatsApp','Email','Web','Event'],
+    type:'entry',
+    note:'Every entry point feeds into Stage 02 automatically. No manual logging required.',
+    entries:[
+      {icon:'🤖', title:'Aarna Partner Identifier Bot', desc:'Actively scans and identifies potential supply partners from web scrapes, OTA listings (Viator, GetYourGuide, Klook), and Google Maps. Adds directly to pipeline with basic profile data.'},
+      {icon:'💬', title:'Referral Intake', desc:'Partner referred via WhatsApp to dedicated supply number or email to supply intake address. System extracts details automatically and moves to Stage 02.'},
+      {icon:'📸', title:'Event Card Capture', desc:'Team at event photographs business cards or writes contacts. WhatsApps or emails image to intake address. System reads, extracts, structures, and moves to Stage 02.'},
+      {icon:'🌐', title:'Website Form', desc:'Partner fills structured form on Aarna or Abhee website. Selects category, uploads photos, adds pricing and location.'},
+      {icon:'📱', title:'Social Inbound', desc:'Partner DMs on Instagram or WhatsApp. Bot captures the message, extracts contact details, moves to structured intake.'},
+    ],
+    outcome:'Partner is in the system. Tagged by source. Moves to Lead Structuring.'
+  },
+  {
+    id:'s1', num:'02', color:'c-teal', icon:'🗂',
+    title:'Lead Structuring',
+    tag:'Identify the right contact, auto-tag and enrich before any human sees it',
+    channels:['CRM','Hunter.io','Apollo.io','Maps'],
+    tasks:[
+      {t:'Contact identification', d:'Before outreach can begin — system identifies the right contact person at each operator. Name, mobile number, and email are verified. If not found automatically, bot sends an enrichment request before progressing.', p:['Right person identified','Email verified','Mobile confirmed','Enrichment request if missing']},
+      {t:'Auto CRM capture', d:'Lead enters CRM instantly on arrival. Auto-tagged: location, category, source, sub-team assignment.', p:['Location','Category','Source','Sub-team']},
+      {t:'Data enrichment', d:'Missing email → Hunter.io or Apollo.io runs on domain. Missing address → pulled from Google Maps. Phone checked against WhatsApp availability.', p:['Email via Hunter/Apollo','Address via Maps','Phone enrichment']},
+      {t:'Completeness check', d:'If critical fields still missing after enrichment — bot sends auto WhatsApp or email requesting them. Does not move forward until complete.', p:['Auto WhatsApp','Auto email','Waits for response']},
+    ],
+    outcome:'Right contact identified. Every lead is complete and tagged. No half-filled records move forward.'
+  },
+  {
+    id:'s2', num:'03', color:'c-amber', icon:'❓',
+    title:'Smart Qualification',
+    tag:'Classify before scoring',
+    channels:['Auto','Bot'],
+    note:'System classifies automatically from form data and enrichment. No human input needed.',
+    tasks:[
+      {t:'Type classification', d:'Experience provider (activity, dining, wellness, adventure) → fast-track onboarding. Service provider (transport, photography) → longer cycle.', p:['Experience → fast-track','Service → longer cycle']},
+      {t:'Digitisation level', d:'Has website + photos + pricing = Digitised → Gautam. Partial or none = Semi+Undigitised → Michelle.', p:['Digitised → Gautam','Semi+Undig → Michelle']},
+      {t:'Intent signal', d:'Self-submitted = high intent. Bot-found = medium. Referred on behalf of = verify first.', p:['Self-submitted → high','Bot-found → medium','Referred → verify']},
+    ],
+    outcome:'Lead classified: type, digitisation level, intent signal. Ready for scoring.'
+  },
+  {
+    id:'s3', num:'04', color:'c-red', icon:'📊',
+    title:'Lead Scoring',
+    tag:'Only qualified leads reach outreach',
+    channels:['Auto'],
+    type:'scoring',
+    scores:[
+      {tier:'High', ts:'background:#D1FAE5;color:#065F46', title:'Fast-track', desc:'Self-submitted · Complete data · Experience provider · UAE location · Photos available.', act:'Immediate outreach — same day', as:'background:#D1FAE5;color:#065F46'},
+      {tier:'Medium', ts:'background:#FEF3E2;color:#92510A', title:'Qualify first', desc:'Bot-found or referred · Partial data · Experience provider · Some content available.', act:'Outreach sequence → qualify', as:'background:#FEF3E2;color:#92510A'},
+      {tier:'Low', ts:'background:#FEF2F2;color:#991B1B', title:'Nurture', desc:'Incomplete data · Service provider · Outside UAE · No content available.', act:'Nurture sequence → delay', as:'background:#FEF2F2;color:#991B1B'},
+    ],
+    outcome:'High intent fast-tracked. Medium goes through sequence. Low nurtured — not wasted on the team.'
+  },
+  {
+    id:'s4', num:'05', color:'c-amber', icon:'📡',
+    title:'Multi-Channel Outreach',
+    tag:'AI agent makes first contact — all channels',
+    channels:['Voice','Email','LinkedIn','WhatsApp','Instagram'],
+    note:'Voice is the primary channel for small operators. Email and LinkedIn for more corporate supply partners. WhatsApp and Instagram as backup.',
+    type:'outreach',
+    tasks:[
+      {t:'Voice call — first contact', d:'AI voice agent calls the owner directly. Warm and short. Explains Aarna, what listing means for them, what they get. Tries to move to onboarding directly on the call.', p:['Owner-friendly tone','Onboarding ask on call','Escalates if requested']},
+      {t:'Email — initial outreach', d:'Personalised to their category and experience type. Explains Aarna distribution (Abhee + MIRAEE + Mondee network). Single CTA — book onboarding or reply with details.', p:['Category personalised','Aarna distribution pitch','Calendar link']},
+      {t:'LinkedIn — for corporate supply', d:'For DMCs, hotels, and activity companies with LinkedIn presence. Short connection message referencing their business. Not a pitch on first touch.', p:['References their business','No pitch on first touch','Follow-up after connect']},
+      {t:'WhatsApp — if mobile available', d:'Short message, same content as email. One-pager link attached. More effective for F&B, adventure, and independent operators.', p:['Short message','One-pager attached']},
+      {t:'Follow-up sequence', d:'No reply Day 3 → Follow-up 1 (different angle). No reply Day 10 → Follow-up 2 (soft close). All operators equal priority — no tiering in supply outreach.', p:['Day 3 — different angle','Day 10 — soft close','Equal priority']},
+    ],
+    script:{
+      call:[
+        {says:'AI opens with:', line:'"Hi, I\'m calling on behalf of Aarna — the supply platform powering Abhee and MIRAEE in the UAE. I noticed your [business type] and wanted to see if listing on our platform would make sense for you. It takes about 15 minutes and puts you in front of corporate travellers, MICE delegates, and tourists — all in one place. Do you have 2 minutes?"'},
+        {says:'If they say yes:', line:'"Great. Aarna is the single supply platform for all Mondee products in the UAE. When you list with us, your experience shows up on Abhee for tourists and leisure travellers, MIRAEE for corporate bookings, and across the entire Mondee agent network globally. There\'s no upfront cost — we work on commission per booking. Can I ask — do you have your experience details, photos, and pricing ready?"'},
+        {says:'If they ask about commission:', line:'"Our standard commission is [X]% per confirmed booking. You set your own pricing. We just take a percentage when a booking comes through. You keep full control."'},
+        {says:'If they say call back later:', line:'"Absolutely, no problem. Can I confirm a time that works? I\'ll send you a calendar invite so it\'s locked in."'},
+      ],
+      email:[
+        {says:'Subject line:', line:'"List on Aarna — reach corporate travellers, MICE delegates, and tourists across the UAE"'},
+        {says:'Opening line:', line:'"I came across [business name] and think you\'d be a great fit for Aarna — the supply platform powering Abhee and MIRAEE in the UAE."'},
+        {says:'Value line:', line:'"One listing puts you in front of [segment] — no setup cost, commission only on confirmed bookings."'},
+        {says:'CTA:', line:'"Takes 15 minutes. Here\'s a link to book a quick onboarding call or you can reply with your details directly: [CALENDAR_LINK]"'},
+      ]
+    },
+    outcome:'Every partner contacted across all relevant channels. Full sequence running.'
+  },
+  {
+    id:'s5', num:'06', color:'c-green', icon:'💬',
+    title:'Reply Management',
+    tag:'Every response handled — AI runs the conversation',
+    channels:['Voice','Email','WhatsApp','LinkedIn'],
+    type:'reply',
+    tasks:[
+      {t:'Reply classification', d:'Classifies instantly: interested, not now, question, wrong person, OOO. Each triggers a different response path.', p:['Interested','Not now','Question','OOO','Wrong person']},
+      {t:'AI voice — call-back', d:'Operator calls back → AI voice agent holds qualifying conversation. Confirms experience type and intent. Moves directly to onboarding if ready.', p:['Qualifying questions','Moves to onboarding','Escalates if human requested']},
+      {t:'AI text response', d:'Email, WhatsApp, or LinkedIn reply → AI drafts contextual response. One clear next step. Always includes calendar link or direct onboarding path.', p:['Context-aware','One next step','Calendar or direct onboard']},
+      {t:'"Not now" handling', d:'AI confirms right time, schedules re-contact at agreed date. Not closed — deferred with a date.', p:['Agreed date confirmed','Re-contact scheduled','Not closed']},
+      {t:'Escalation signal detection', d:'If partner says "I want to speak to someone", "can I talk to a person", "I need to discuss terms" — AI detects and triggers human branch immediately.', p:['Keyword detection','Immediate flag','Human branch triggered']},
+    ],
+    qa:[
+      {q:'Can I set a net rate instead of commission?', a:'Yes. We offer two commercial models: (1) commission — you set your retail price and we take a percentage per confirmed booking; or (2) net rate — you give us a net price and we add our margin on top. The default is commission on retail price. You can confirm your preferred model during the onboarding call.'},
+      {q:'Can I use my own contract instead of signing yours?', a:'Yes. If you have a standard vendor agreement, you can submit it for review and our team will assess and countersign if acceptable. Alternatively, we can share our standard Aarna partner agreement for e-signature. Either way, a signed agreement is required before your listing goes live.'},
+      {q:'What is Aarna?', a:'Aarna is Mondee\'s single supply platform for the UAE. When you list on Aarna, your experience is available on Abhee (for tourists and leisure), MIRAEE (for corporates), and across the full Mondee global agent network.'},
+      {q:'What commission do you take?', a:'We work on a commission-per-booking model. You set your own pricing. We take [X]% only when a confirmed booking comes through. No setup fees, no monthly charges.'},
+      {q:'I already list on Viator / GetYourGuide / Klook.', a:'Aarna is additive — not a replacement. We bring a completely different audience: UAE-based corporates, MICE delegates, and Mondee\'s global B2B agent network. None of those platforms reach this segment.'},
+      {q:'How do I get bookings?', a:'Aarna distributes your listing to Abhee, MIRAEE, and Mondee\'s agent base automatically. You don\'t need to market yourself — we handle discovery and booking. You just manage availability and fulfilment.'},
+      {q:'What do I need to provide?', a:'Experience description, photos, pricing, and your availability. You\'ll also confirm how you prefer to manage bookings — via the Aarna partner dashboard or coordinated offline through your own team. If you have an API or booking system, we can integrate. If not, we manage it through a simple availability calendar.'},
+      {q:'How long does it take to go live?', a:'If you have your content ready — 15 to 30 minutes for the onboarding call. We review and publish within 24 hours of receiving your final content.'},
+      {q:'Do I sign a contract?', a:'Yes — a standard Aarna partner agreement. It covers commission rate, content rights, booking terms, and cancellation policy. We\'ll share it digitally for e-signature. Most partners sign during or right after the onboarding call.'},
+      {q:'What if I want to speak to someone from the team?', a:'Absolutely. I\'ll connect you with our partnerships team right now. Let me check their calendar and get a time booked for you — will [time] work?'},
+      {q:'Is this only for UAE?', a:'For now, yes. Aarna is focused on UAE supply — experiences, stays, and services across Dubai, Abu Dhabi, Ras Al Khaimah, and the wider UAE.'},
+      {q:'Can I pause or remove my listing?', a:'Yes. You have full control over your listing — you can update pricing, pause availability, or remove your listing at any time through the Aarna partner dashboard.'},
+      {q:'What types of experiences do you list?', a:'Adventures, culture and heritage, food and dining, entertainment, wellness and sports, shopping, and stays. If your experience fits any of these, you\'re a fit for Aarna.'},
+      {q:'How do I get paid?', a:'Payments are processed monthly. We transfer the net amount (booking value minus commission) directly to your account within [X] days of the end of each month.'},
+    ],
+    outcome:'Every reply handled. Interested partners move to onboarding. Human branch triggered only when partner requests it.'
+  },
+  {
+    id:'s6', num:'07', color:'c-blue', icon:'🤝',
+    title:'AI-Led Onboarding',
+    tag:'AI handles everything — contract to content to live',
+    channels:['Voice','Email','WhatsApp','e-Sign'],
+    note:'AI runs this entire stage without human involvement unless partner requests otherwise.',
+    type:'onboarding',
+    steps:[
+      {n:'01', title:'Business details collection', desc:'AI collects: legal business name, trade licence number, category, location, contact person, bank details for payment.', p:['Legal name','Trade licence','Category','Bank details']},
+      {n:'02', title:'Experience description', desc:'AI asks: what is the experience, how long does it run, what is included, what is excluded, max group size, languages offered, accessibility.', p:['Description','Duration','Inclusions','Group size','Languages']},
+      {n:'03', title:'Pricing and commercial model', desc:'AI collects per-person pricing, group pricing if applicable, seasonal variations, and availability. AI also confirms preferred commercial model: (1) commission deducted from retail price — partner sets price, Aarna takes commission per booking; or (2) net rate model — partner sets net price, Aarna adds margin on top. Default is commission on retail price.', p:['Per-person price','Group pricing','Seasonal rates','Commission model','Net rate option','Availability']},
+      {n:'04', title:'Content collection', desc:'AI requests: minimum 5 photos, 1 cover photo, optional video. If partner has API or booking system — AI requests API credentials or webhook details.', p:['5+ photos','Cover image','Optional video','API if available']},
+      {n:'05', title:'Partner agreement', desc:'AI shares the standard Aarna partner agreement digitally for e-signature. Agreement covers commission, content rights, booking terms, and cancellation policy. Alternatively — if the partner has their own standard vendor agreement, they may submit it for review and countersignature by Aarna. Both paths result in a signed agreement before listing goes live.', p:['Aarna standard agreement','OR partner submits own contract','E-signature','Commission confirmed','Terms agreed']},
+      {n:'06', title:'Booking management preference', desc:'AI confirms how the partner will manage bookings. Option 1: Aarna partner dashboard — partner manages availability and receives booking notifications directly. Option 2: Offline — partner coordinates bookings through their own backend team. Offline partners receive booking notifications and confirm availability manually with their operations team. Preference flagged in CRM.', p:['Dashboard option','Offline option','Flagged in CRM']},
+      {n:'07', title:'Listing review', desc:'AI reviews all submitted content against Aarna quality standards. Flags any missing or low-quality content. Requests fixes before publishing.', p:['Quality check','Missing content flagged','Fix requests sent']},
+      {n:'08', title:'Publish to Aarna', desc:'Once all content is approved and agreement signed — AI publishes listing to Aarna. Distribution flows automatically to Abhee and MIRAEE.', p:['Published to Aarna','Flows to Abhee','Flows to MIRAEE','Live within 24h']},
+    ],
+    outcome:'Partner is live on Aarna. No human involved. Listing distributed across all Mondee products.'
+  },
+  {
+    id:'s7', num:'08', color:'c-gray', icon:'📋',
+    title:'CRM & Reporting',
+    tag:'Full record. Weekly visibility via Zoho.',
+    channels:['Zoho CRM','Weekly Report'],
+    tasks:[
+      {t:'CRM updated throughout', d:'Every stage transition updates the CRM record automatically. Status, notes, content submitted, agreement signed — all tracked.', p:['Stage status','Content received','Agreement status','Live date']},
+      {t:'Weekly performance report via Zoho', d:'Generated automatically from Zoho CRM on a scheduled day each week. Covers: new leads added, outreach volume, reply rates, onboardings started, onboardings completed, partners live, human handoffs triggered, items requiring attention — split by sub-team. Distributed to team leads and Sneden. No manual prep required.', p:['New leads','Outreach volume','Reply rates','Onboardings started','Onboardings completed','Partners live','Human handoffs','By sub-team']},
+      {t:'Partner live notification', d:'When a partner goes live — auto notification sent to the supply team and a welcome email sent to the partner with their listing link and dashboard access.', p:['Team notified','Partner welcome email','Listing link shared','Dashboard access']},
+    ],
+    outcome:'Full pipeline visibility via Zoho. Every partner tracked from discovery to live. Weekly report auto-distributed. No manual updates needed.'
+  },
+];
+
+const branchStage = {
+  id:'branch', num:'B', color:'c-amber', icon:'👤',
+  title:'Human Branch — On Request Only',
+  tag:'Triggered when partner asks to speak with a person',
+  channels:['Calendar','CRM','Voice'],
+  isBranch: true,
+  note:'This branch can be triggered at any stage from 05 onwards. AI detects the signal and routes immediately to the assigned team member (Gautam, Michelle, Sneden, Shadaab, Neerzari or Nikhil).',
+  routing:[
+    {
+      label:'Digitised', ls:'background:#EFF4FF;color:#1D4ED8',
+      dot:'#3B82F6',
+      title:'Gautam\'s Team',
+      sub:'Operators with existing digital presence',
+      crit:['Has website and social presence','Already on OTAs or booking platforms','Photos and pricing available','API integration possible']
+    },
+    {
+      label:'Semi + Undigitised', ls:'background:#FDF2F8;color:#9D174D',
+      dot:'#EC4899',
+      title:'Michelle\'s Team',
+      sub:'Operators with limited or no online presence',
+      crit:['Limited or no website','Not on any OTA','Needs help structuring their listing','Identified through web research or referral']
+    }
+  ],
+  steps:[
+    {n:'01', title:'Trigger detected', desc:'AI detects request: "I want to speak to someone", "can I talk to a person", "I need to discuss terms". Flags immediately.', p:['Keyword detection','Instant flag']},
+    {n:'02', title:'Category routing', desc:'System checks digitisation level from Stage 03. Routes to Gautam (Digitised) or Michelle (Semi+Undigitised).', p:['Digitised → Gautam','Semi+Undig → Michelle']},
+    {n:'03', title:'Calendar event created', desc:'AI checks assigned team member\'s calendar availability. Proposes 2–3 slots to partner. Partner confirms. Calendar invite sent to both.', p:['Team calendar checked','Slots proposed','Invite sent to both']},
+    {n:'04', title:'CRM handoff brief', desc:'CRM record updated with: partner profile, conversation summary, what was discussed, what the partner needs, suggested approach for the team.', p:['Full conversation summary','Partner needs','Suggested approach']},
+    {n:'05', title:'Team takes over', desc:'Team member opens CRM, reads brief, joins the call fully prepared. From this point — human-led. AI steps back.', p:['Fully briefed','Human-led from here','AI steps back']},
+  ],
+  outcome:'Partner is with the right human. Team is briefed. Calendar is set. AI steps back.'
+};
+
+// ── SIDEBAR ────────────────────────────────────────────────────
+function buildSidebar(){
+  const mEl = document.getElementById('sb-main');
+  mainStages.forEach((s,i)=>{
+    const div = document.createElement('div');
+    div.className = `sb-item ${s.color}${i===0?' active':''}`;
+    div.id = `sb-${s.id}`;
+    div.innerHTML = `<span class="sb-n">${s.num}</span><div class="sb-ic ${s.color}">${s.icon}</div><div><div class="sb-t">${s.title}</div><div class="sb-s">${s.channels.slice(0,3).join(' · ')}</div></div>`;
+    div.onclick = ()=>scrollTo(s.id, div);
+    mEl.appendChild(div);
+    if(i<mainStages.length-1){const d=document.createElement('div');d.className='sb-div';mEl.appendChild(d);}
+  });
+
+  const bEl = document.getElementById('sb-branch');
+  const bdiv = document.createElement('div');
+  bdiv.className = 'sb-branch';
+  bdiv.id = `sb-${branchStage.id}`;
+  bdiv.innerHTML = `<span class="sb-n" style="color:var(--amberv)">B</span><div class="sb-ic c-amber">${branchStage.icon}</div><div><div class="sb-t" style="color:var(--amber)">${branchStage.title}</div><div class="sb-s">On request only</div></div>`;
+  bdiv.onclick = ()=>scrollTo(branchStage.id, bdiv);
+  bEl.appendChild(bdiv);
+
+  // flow bar
+  const fb = document.getElementById('fb-steps');
+  const steps = ['Discovery','Contact ID','Structure','Qualify','Score','Outreach','Reply','Onboard','Zoho Report'];
+  steps.forEach((s,i)=>{
+    const d = document.createElement('div');
+    d.className = 'fb-step on';
+    d.innerHTML = `<div class="fb-dot"></div>${s}`;
+    fb.appendChild(d);
+    if(i<steps.length-1){const a=document.createElement('div');a.className='fb-arr';a.textContent='↓';fb.appendChild(a);}
+  });
+  const bd = document.createElement('div');
+  bd.className = 'fb-step branch-step';
+  bd.style.marginTop = '6px';
+  bd.innerHTML = `<div class="fb-dot"></div>Human Branch (if requested)`;
+  fb.appendChild(bd);
+}
+
+function scrollTo(id, el){
+  document.querySelectorAll('.sb-item,.sb-branch').forEach(x=>x.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(`card-${id}`).scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ── MAIN BUILD ─────────────────────────────────────────────────
+function buildStageBody(s){
+  let h = '';
+  if(s.note) h += `<div class="snote"><div class="sn-d"></div><span>${s.note}</span></div>`;
+
+  if(s.type==='entry'){
+    h += `<div class="entry-grid">${s.entries.map(e=>`<div class="entry-box"><div class="e-icon">${e.icon}</div><div class="e-title">${e.title}</div><div class="e-desc">${e.desc}</div></div>`).join('')}</div>`;
+  }
+  else if(s.type==='scoring'){
+    h += `<div class="score-grid">${s.scores.map(sc=>`<div class="score-box"><div class="sc-tier" style="${sc.ts}">${sc.tier}</div><div class="sc-title">${sc.title}</div><div class="sc-desc">${sc.desc}</div><div class="sc-act" style="${sc.as}">${sc.act}</div></div>`).join('')}</div>`;
+  }
+  else if(s.type==='outreach'){
+    h += `<div class="tasks-row">${s.tasks.map(t=>`<div class="task"><div class="t-title"><div class="tdot"></div>${t.t}</div><div class="t-desc">${t.d}</div><div class="pills">${t.p.map(p=>`<span class="pill">${p}</span>`).join('')}</div></div>`).join('')}</div>`;
+    // Script block
+    h += `<div class="script-block"><div class="script-label">AI call script</div>`;
+    s.script.call.forEach(l=>{h+=`<div class="script-item"><div class="script-says">📞 ${l.says}</div><div class="script-a">${l.line}</div></div>`;});
+    h += `<div class="script-label" style="margin-top:12px">AI email script</div>`;
+    s.script.email.forEach(l=>{h+=`<div class="script-item"><div class="script-says">✉ ${l.says}</div><div class="script-a">${l.line}</div></div>`;});
+    h += `</div>`;
+  }
+  else if(s.type==='reply'){
+    h += `<div class="tasks-row">${s.tasks.map(t=>`<div class="task"><div class="t-title"><div class="tdot"></div>${t.t}</div><div class="t-desc">${t.d}</div><div class="pills">${t.p.map(p=>`<span class="pill">${p}</span>`).join('')}</div></div>`).join('')}</div>`;
+    // Q&A
+    h += `<div class="script-block"><div class="script-label">Supplier questions — AI responses</div><div class="qa-grid">`;
+    s.qa.forEach(qa=>{h+=`<div class="qa-item"><div class="qa-q"><span class="qa-qlbl">Q</span>${qa.q}</div><div class="qa-a"><span class="qa-albl">A</span><span style="font-size:10px;color:var(--text3);line-height:1.6;font-weight:300">${qa.a}</span></div></div>`;});
+    h += `</div></div>`;
+  }
+  else if(s.type==='onboarding'){
+    h += `<div class="ob-steps">${s.steps.map(st=>`<div class="ob-step"><div class="ob-num">${st.n}</div><div class="ob-content"><div class="ob-title">${st.title}</div><div class="ob-desc">${st.desc}</div><div class="pills">${st.p.map(p=>`<span class="pill">${p}</span>`).join('')}</div></div></div>`).join('')}</div>`;
+  }
+  else if(s.tasks){
+    h += `<div class="tasks-row">${s.tasks.map(t=>`<div class="task"><div class="t-title"><div class="tdot"></div>${t.t}</div><div class="t-desc">${t.d}</div><div class="pills">${t.p.map(p=>`<span class="pill">${p}</span>`).join('')}</div></div>`).join('')}</div>`;
+  }
+
+  h += `<div class="out-bar"><span class="out-lbl">Output</span><span class="out-txt">${s.outcome}</span></div>`;
+  return h;
+}
+
+function buildBranchBody(s){
+  let h = '';
+  h += `<div class="anote"><div class="an-d"></div><span>${s.note}</span></div>`;
+  h += `<div class="routing-grid">${s.routing.map(r=>`<div class="route-box"><div class="r-label" style="${r.ls}"><div style="width:6px;height:6px;border-radius:50%;background:${r.dot}"></div>${r.label}</div><div class="r-title">${r.title}</div><div class="r-sub">${r.sub}</div><div class="r-crit">${r.crit.map(c=>`<div class="rc"><div style="width:4px;height:4px;border-radius:50%;background:${r.dot};flex-shrink:0"></div><span style="font-size:9.5px;color:var(--text2)">${c}</span></div>`).join('')}</div></div>`).join('')}</div>`;
+  h += `<div class="ob-steps">${s.steps.map(st=>`<div class="ob-step"><div class="ob-num">${st.n}</div><div class="ob-content"><div class="ob-title">${st.title}</div><div class="ob-desc">${st.desc}</div><div class="pills">${st.p.map(p=>`<span class="pill">${p}</span>`).join('')}</div></div></div>`).join('')}</div>`;
+  h += `<div class="out-bar" style="background:var(--amberl);border-top-color:#FCD34D"><span class="out-lbl" style="background:var(--amber);color:white">Output</span><span class="out-txt">${s.outcome}</span></div>`;
+  return h;
+}
+
+function buildMain(){
+  const main = document.getElementById('main');
+
+  // branch signal shown between stage 05 and 06
+  const branchSignalHTML = `<div class="branch-signal"><div class="bs-icon">⚡</div><div><div class="bs-label">Human Branch — Available from this point</div><div class="bs-text">If at any point the partner says "I want to speak to someone" — AI detects it instantly and routes to the Human Branch. See Branch section below.</div></div></div>`;
+
+  mainStages.forEach((s,i)=>{
+    // section labels
+    if(i===0){const sl=document.createElement('div');sl.className='section-label';sl.innerHTML=`Discovery & Qualification<div class="sl-line"></div>`;main.appendChild(sl);}
+    if(i===4){const sl=document.createElement('div');sl.className='section-label';sl.innerHTML=`Outreach & Conversion<div class="sl-line"></div>`;main.appendChild(sl);}
+    if(i===6){const sl=document.createElement('div');sl.className='section-label';sl.innerHTML=`Onboarding & Live<div class="sl-line"></div>`;main.appendChild(sl);}
+
+    const card = document.createElement('div');
+    card.className = `stage-card ${s.color}`;
+    card.id = `card-${s.id}`;
+    card.innerHTML = `
+      <div class="stage-hdr" onclick="toggle('${s.id}')">
+        <span class="s-num">${s.num}</span>
+        <div class="s-ic ${s.color}">${s.icon}</div>
+        <div class="s-info">
+          <div class="s-title">${s.title}</div>
+          <div class="s-tag">${s.tag}</div>
+        </div>
+        <div class="s-chs">${s.channels.slice(0,4).map(c=>`<span class="ch">${c}</span>`).join('')}</div>
+        <span class="chev">›</span>
+      </div>
+      <div class="stage-body">${buildStageBody(s)}</div>`;
+    main.appendChild(card);
+
+    // Insert branch signal after stage 04 (outreach)
+    if(i===4){const bs=document.createElement('div');bs.innerHTML=branchSignalHTML;main.appendChild(bs.firstChild);}
+  });
+
+  // Live card
+  const live = document.createElement('div');
+  live.className = 'live-card';
+  live.innerHTML = `<div class="live-check">✓</div><div><div class="live-lbl">End State</div><div class="live-title">Partner live on Aarna</div><div class="live-sub">Listing distributed to Abhee · MIRAEE · Full Mondee agent network · Weekly Zoho report auto-distributed · No human involved</div></div>`;
+  main.appendChild(live);
+
+  // Branch section
+  const bsl = document.createElement('div');
+  bsl.className = 'section-label';
+  bsl.style.marginTop = '20px';
+  bsl.innerHTML = `Human Branch — On Request Only<div class="sl-line"></div>`;
+  main.appendChild(bsl);
+
+  const bcard = document.createElement('div');
+  bcard.className = `branch-card ${branchStage.color}`;
+  bcard.id = `card-${branchStage.id}`;
+  bcard.innerHTML = `
+    <div class="stage-hdr" onclick="toggle('${branchStage.id}')">
+      <span class="s-num" style="color:var(--amberv)">B</span>
+      <div class="s-ic c-amber">${branchStage.icon}</div>
+      <div class="s-info">
+        <div class="s-title" style="color:var(--amber)">${branchStage.title}</div>
+        <div class="s-tag">${branchStage.tag}</div>
+      </div>
+      <div class="s-chs">${branchStage.channels.map(c=>`<span class="ch">${c}</span>`).join('')}</div>
+      <span class="chev">›</span>
+    </div>
+    <div class="stage-body">${buildBranchBody(branchStage)}</div>`;
+  main.appendChild(bcard);
+}
+
+function toggle(id){
+  const c = document.getElementById(`card-${id}`);
+  if(c) c.classList.toggle('open');
+}
+
+buildSidebar();
+buildMain();
+
+// scroll spy
+const obs = new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      const id = e.target.id.replace('card-','');
+      document.querySelectorAll('.sb-item,.sb-branch').forEach(x=>x.classList.remove('active'));
+      const sb = document.getElementById(`sb-${id}`);
+      if(sb) sb.classList.add('active');
+    }
+  });
+},{root:document.querySelector('.main'),threshold:0.3});
+
+[...mainStages, branchStage].forEach(s=>{
+  const el = document.getElementById(`card-${s.id}`);
+  if(el) obs.observe(el);
+});
+</script>
+</body>
+</html>

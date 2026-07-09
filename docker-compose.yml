@@ -1,23 +1,28 @@
 # docker-compose.yml
-# GTM UAE Partner Pipeline — local development stack
+# GTM UAE Partner Pipeline — deployment stack
 #
 # Services
 # --------
 #   postgres   — PostgreSQL 16 database (auto-initialises schema on first start)
-#   pipeline   — Python pipeline runner (runs graph.py)
+#   backend    — FastAPI web server (voice agent, Ozonetel stream, all API routes) — always running
+#   caddy      — reverse proxy, gives you a stable wss://yourdomain.com with auto TLS
+#   pipeline   — Python pipeline runner, one-shot batch jobs (graph.py, migrations)
 #
 # Usage
 # -----
 #   1. Copy .env.example to .env and fill in credentials.
 #   2. Place the Excel file at the repo root as:
 #         "GTM UAE_ Track 1 & 2 Db.xlsx"
-#   3. Start the DB only (first time — let Postgres init):
-#         docker compose up postgres -d
-#   4. Run the migration to load Excel → Postgres:
+#   3. Point your domain's DNS A record at this server's public IP.
+#   4. Edit Caddyfile — replace "yourdomain.com" with your real domain.
+#   5. Start everything:
+#         docker compose up -d
+#      (backend + caddy come up with restart: always — survive crashes/reboots)
+#   6. Run the migration to load Excel → Postgres (one-shot):
 #         docker compose run --rm pipeline python scripts/migrate_excel_to_db.py
-#   5. Run the full pipeline:
-#         docker compose run --rm pipeline python graph.py
-#   6. To reset the DB entirely (drops all data):
+#   7. Ozonetel WebSocket URL to hand over:
+#         wss://yourdomain.com/ozonetel/stream
+#   8. To reset the DB entirely (drops all data):
 #         docker compose down -v
 
 services:
@@ -45,7 +50,49 @@ services:
       retries: 10
       start_period: 10s
 
-  # ── Pipeline runner ─────────────────────────────────────────────────────────
+  # ── FastAPI backend (voice agent, Ozonetel stream, all API routes) ─────────
+  # This is the persistent web server — separate from the `pipeline` service
+  # below, which only runs one-shot batch scripts (graph.py, migrations) and
+  # exits. Ozonetel/Twilio need something that stays running and reachable
+  # 24/7, which `pipeline` was never set up to provide.
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gtm_uae_backend
+    restart: always
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+  # ── Caddy reverse proxy ──────────────────────────────────────────────────
+  # Gives you a STABLE public wss://yourdomain.com URL with automatic,
+  # auto-renewing TLS — unlike ngrok, this doesn't change on every restart.
+  # This is what makes the Ozonetel WebSocket URL "always up": Ozonetel
+  # points at your domain, not at an ephemeral tunnel URL.
+  caddy:
+    image: caddy:2-alpine
+    container_name: gtm_uae_caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+  # ── Pipeline runner (one-shot batch jobs — unchanged) ───────────────────────
   pipeline:
     build:
       context: .
@@ -69,3 +116,7 @@ services:
 volumes:
   postgres_data:
     name: gtm_uae_postgres_data
+  caddy_data:
+    name: gtm_uae_caddy_data
+  caddy_config:
+    name: gtm_uae_caddy_config  

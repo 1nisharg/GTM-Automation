@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _ROOT        = Path(__file__).resolve().parent.parent
 _INIT_SQL    = _ROOT / "db" / "init.sql"
 _SCHEMA_SQL  = _ROOT / "voice_agent" / "db_schema.sql"
-_EXCEL_FILE  = _ROOT / "GTM_UAE__Track_1___2_Db.xlsx"
+_EXCEL_FILE  = _ROOT / "GTM UAE_ Track 1 & 2 Db.xlsx"
 
 TARGET_STATUSES = {"Partner Outreach", "Yet to Start"}
 
@@ -51,6 +51,46 @@ async def _ensure_meta_table(conn) -> None:
             key   TEXT PRIMARY KEY,
             value TEXT
         )
+    """)
+
+
+async def _ensure_api_usage_table(conn) -> None:
+    """
+    Create the api_usage table — tracks Hunter (and any future non-Apollo
+    API) usage for daily-limit enforcement and audit.
+
+    This is embedded directly here (rather than a separate .sql file) so
+    it can never silently go missing again — a prior version of this
+    project referenced an external api_usage_schema.sql file that was
+    lost during a refactor, which caused Hunter's daily-limit check and
+    usage logging to fail silently (caught by try/except, defaulting to
+    "allow the call") with zero visible error until a manual DB reset
+    surfaced "relation api_usage does not exist".
+
+    Apollo has its own separate apollo_usage table (created by init.sql)
+    with its own schema — this table is for Hunter/Tavily/other sources.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS api_usage (
+            id           SERIAL PRIMARY KEY,
+            run_id       TEXT DEFAULT '',
+            partner_name TEXT DEFAULT '',
+            api_name     TEXT NOT NULL,
+            operation    TEXT NOT NULL,
+            success      BOOLEAN DEFAULT true,
+            result       TEXT DEFAULT '',
+            request_cost NUMERIC DEFAULT 1,
+            called_at    TIMESTAMP DEFAULT now()
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_api_usage_api_name  ON api_usage (api_name)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_api_usage_run_id    ON api_usage (run_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_api_usage_called_at ON api_usage (called_at DESC)
     """)
 
 
@@ -150,6 +190,16 @@ async def _seed_partners(conn, records: list[tuple]) -> None:
     total = 0
     for i in range(0, len(records), chunk_size):
         chunk = records[i:i + chunk_size]
+        # Insert with NULL contact fields — we deliberately do NOT seed
+        # phone_number, email_id, linkedin_profile from Excel because:
+        # 1. The Excel data is often generic (info@, outdated numbers)
+        # 2. The enrichment pipeline will find real personal contacts
+        # 3. After a reset we want a fully clean enrichment slate
+        # Strip contact columns from each record before insert:
+        clean_chunk = [
+            (r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], None, None, None, r[12])
+            for r in chunk
+        ]
         await conn.executemany("""
             INSERT INTO partners
                 (partner_name, digitisation, category, subcategories, website,
@@ -164,11 +214,8 @@ async def _seed_partners(conn, records: list[tuple]) -> None:
                 product_count    = EXCLUDED.product_count,
                 status           = EXCLUDED.status,
                 integrated       = EXCLUDED.integrated,
-                region           = EXCLUDED.region,
-                phone_number     = COALESCE(EXCLUDED.phone_number,     partners.phone_number),
-                email_id         = COALESCE(EXCLUDED.email_id,         partners.email_id),
-                linkedin_profile = COALESCE(EXCLUDED.linkedin_profile, partners.linkedin_profile)
-        """, chunk)
+                region           = EXCLUDED.region
+        """, clean_chunk)
         total += len(chunk)
 
     logger.info("db_init: upserted %d partners into Supabase", total)
@@ -198,6 +245,13 @@ async def run_startup_migrations() -> None:
         except Exception as exc:
             logger.warning("db_init: db_schema.sql error (tables may already exist): %s", exc)
 
+        # ── Step 2b: Re-run init.sql to pick up outreach_sequence table ────
+        # Uses CREATE TABLE IF NOT EXISTS throughout — safe to re-run every boot.
+        try:
+            await _run_sql_file(conn, _INIT_SQL)
+        except Exception as exc:
+            logger.warning("db_init: init.sql re-run error: %s", exc)
+
         # ── Step 3: Ensure unique constraint for upsert ────────────────────
         try:
             await conn.execute("""
@@ -215,11 +269,30 @@ async def run_startup_migrations() -> None:
         except Exception as exc:
             logger.warning("db_init: meta table error: %s", exc)
 
+        # ── Step 4b: api_usage table for Hunter/Tavily daily-limit tracking ─
+        # This was previously an external .sql file that silently went
+        # missing during a refactor — now embedded directly so it can
+        # never be dropped again without a visible code change.
+        try:
+            await _ensure_api_usage_table(conn)
+            logger.info("db_init: api_usage table ready.")
+        except Exception as exc:
+            logger.warning("db_init: api_usage table creation error: %s", exc)
+
         # ── Step 5: Check if Excel seed needed ─────────────────────────────
         try:
+            # Log exact path so startup logs show whether file is found
+            logger.info("db_init: Excel path = %s (exists=%s)", _EXCEL_FILE, _EXCEL_FILE.exists())
+
             current_hash  = _excel_hash()
             stored_hash   = await _get_meta(conn, "excel_hash")
             partner_count = await conn.fetchval("SELECT COUNT(*) FROM partners")
+
+            logger.info(
+                "db_init: partner_count=%d excel_found=%s hash_match=%s",
+                partner_count, _EXCEL_FILE.exists(),
+                current_hash == stored_hash if current_hash else "no_hash",
+            )
 
             needs_seed = (
                 current_hash is not None and (
@@ -232,10 +305,17 @@ async def run_startup_migrations() -> None:
                 reason = "table empty" if partner_count == 0 else "Excel file changed"
                 logger.info("db_init: seeding partners (%s)…", reason)
                 records = _parse_excel()
-                await _seed_partners(conn, records)
-                if current_hash:
-                    await _set_meta(conn, "excel_hash", current_hash)
-                logger.info("db_init: seed complete — %d partners in DB", len(records))
+                if not records:
+                    logger.error(
+                        "db_init: Excel parsed 0 records — check file exists at %s "
+                        "and sheet names are 'Track 1 Db' / 'Track 2 Db'", _EXCEL_FILE
+                    )
+                else:
+                    # Seed using the existing conn — mark meta immediately after
+                    await _seed_partners(conn, records)
+                    if current_hash:
+                        await _set_meta(conn, "excel_hash", current_hash)
+                    logger.info("db_init: seed complete — %d partners in DB", len(records))
             else:
                 logger.info(
                     "db_init: partners table has %d rows, Excel unchanged — skipping seed.",

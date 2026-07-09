@@ -15,8 +15,13 @@ class GraphState(TypedDict, total=False):
     Fields
     ------
     input_category : str
-        The subcategory theme to search for, e.g. "Adventure & Extreme Sports".
+        The subcategory theme OR partner name to search for.
+        e.g. "Adventure & Extreme Sports"  →  category search
+             "Al Rakha Tourism"             →  name search (auto-detected)
         Set once at graph invocation time; read-only by all downstream nodes.
+
+    search_mode : str
+        Auto-detected from input_category. "category" or "name".
 
     run_id : str
         Unique ID for this pipeline run — used for log correlation.
@@ -37,6 +42,7 @@ class GraphState(TypedDict, total=False):
     """
 
     input_category:      str
+    search_mode:         str          # "category" | "name" — auto-detected from input
     run_id:              str
     discovered_partners: List[dict]
     enriched_partners:   List[dict]

@@ -18,6 +18,7 @@ interface OutreachLead {
   id: string;
   business_name: string;
   category: string;
+  company_synopsis: string | null;
   score: number;
   score_tier: string;
   phone: string | null;
@@ -395,6 +396,9 @@ export default function OutreachPage() {
   const [testEmail,     setTestEmail]     = useState("");
   const [testLinkedin,  setTestLinkedin]  = useState("");
   const [testName,      setTestName]      = useState("Test Partner");
+  const [testContactName, setTestContactName] = useState("");
+  const [testCategory,  setTestCategory]  = useState("");
+  const [testSynopsis,  setTestSynopsis]  = useState("");
   const [testLaunching, setTestLaunching] = useState(false);
 
   const fetchLeads = async () => {
@@ -478,6 +482,9 @@ export default function OutreachPage() {
             phone_number:     testPhone,
             email_id:         testEmail,
             linkedin_profile: testLinkedin,
+            contact_name:     testContactName,
+            category:         testCategory,
+            company_synopsis: testSynopsis,
           },
         }),
       });
@@ -613,6 +620,7 @@ export default function OutreachPage() {
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Business</th>
                   <th className="px-4 py-3 text-left font-medium">Category</th>
+                  <th className="px-4 py-3 text-left font-medium">Synopsis</th>
                   <th className="px-4 py-3 text-left font-medium">Channels</th>
                   <th className="px-4 py-3 text-left font-medium">Last Channel</th>
                   <th className="px-4 py-3 text-left font-medium">Status</th>
@@ -623,15 +631,40 @@ export default function OutreachPage() {
                 {/* ── Manual test row ── */}
                 <tr className="bg-amber-500/5 border-b-2 border-amber-500/30">
                   <td className="px-4 py-3">
-                    <input
-                      value={testName}
-                      onChange={e => setTestName(e.target.value)}
-                      placeholder="Test Partner Name"
-                      className="bg-background border border-amber-500/40 rounded px-2 py-1 text-xs w-40 focus:outline-none focus:ring-1 focus:ring-amber-500"
-                    />
+                    <div className="flex flex-col gap-1.5">
+                      <input
+                        value={testName}
+                        onChange={e => setTestName(e.target.value)}
+                        placeholder="Test Company Name"
+                        className="bg-background border border-amber-500/40 rounded px-2 py-1 text-xs w-40 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                      <input
+                        value={testContactName}
+                        onChange={e => setTestContactName(e.target.value)}
+                        placeholder="Test Contact Name (person)"
+                        className="bg-background border border-amber-500/40 rounded px-2 py-1 text-xs w-40 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <span className="bg-amber-500/20 text-amber-400 text-[10px] px-1.5 py-0.5 rounded uppercase font-bold">TEST</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col gap-1.5">
+                      <input
+                        value={testCategory}
+                        onChange={e => setTestCategory(e.target.value)}
+                        placeholder="Category (e.g. Restaurant)"
+                        className="bg-background border border-amber-500/40 rounded px-2 py-0.5 text-xs w-40 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                      <textarea
+                        value={testSynopsis}
+                        onChange={e => setTestSynopsis(e.target.value)}
+                        placeholder="Synopsis (1-3 sentences)…"
+                        rows={2}
+                        className="bg-background border border-amber-500/40 rounded px-2 py-0.5 text-xs w-40 resize-none focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-col gap-1.5">
@@ -666,14 +699,14 @@ export default function OutreachPage() {
                 {loading ? (
                   Array.from({ length: 6 }).map((_, i) => (
                     <tr key={i}>
-                      {Array.from({ length: 6 }).map((_, j) => (
+                      {Array.from({ length: 7 }).map((_, j) => (
                         <td key={j} className="px-4 py-3"><div className="h-4 shimmer rounded w-3/4" /></td>
                       ))}
                     </tr>
                   ))
                 ) : filteredLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
                       No outreach leads found. Run the pipeline to enrich partners first.
                     </td>
                   </tr>
@@ -682,6 +715,18 @@ export default function OutreachPage() {
                     <td className="px-4 py-3 font-medium">{lead.business_name}</td>
                     <td className="px-4 py-3">
                       <span className="bg-secondary text-secondary-foreground text-[10px] px-1.5 py-0.5 rounded uppercase">{lead.category}</span>
+                    </td>
+                    <td className="px-4 py-3 max-w-xs">
+                      {lead.company_synopsis ? (
+                        <span
+                          className="text-xs text-muted-foreground line-clamp-2"
+                          title={lead.company_synopsis}
+                        >
+                          {lead.company_synopsis}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/50 italic">No synopsis</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1.5">
