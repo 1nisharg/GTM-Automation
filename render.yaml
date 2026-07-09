@@ -28,9 +28,10 @@ services:
     name: gtm-uae-backend
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: starter          # cheapest plan with no spin-down — needed since
-                           # calls can arrive any time; the free tier sleeps
-                           # after inactivity, which would drop live calls
+    plan: free              # spins down after ~15 min idle, ~30-60s cold
+                            # start on next request — acceptable for testing,
+                            # but any Ozonetel call arriving while asleep will
+                            # likely fail or time out during the wake-up window
     # Render injects $PORT dynamically (not always 8000) — the start
     # command MUST bind to it, or the service will fail health checks.
     dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
