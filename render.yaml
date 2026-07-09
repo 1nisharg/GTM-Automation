@@ -1,0 +1,71 @@
+# render.yaml
+# -----------
+# Render Blueprint — deploys backend/main.py as a persistent web service.
+# Render gives you a stable URL automatically: https://<service-name>.onrender.com
+# (and wss://<service-name>.onrender.com for WebSocket connections) — no
+# domain purchase or DNS setup needed, unlike the Caddy/VPS approach.
+#
+# Setup:
+#   1. Push this repo to GitHub (Render deploys from a git repo).
+#   2. In the Render dashboard: New -> Blueprint -> connect this repo.
+#      Render reads this file automatically and creates the service below.
+#   3. Fill in the environment variables marked `sync: false` in the
+#      Render dashboard (Environment tab) — these are secrets that
+#      shouldn't be committed to git, so they're not filled in here.
+#      Copy the values straight from your local .env file.
+#   4. Deploy. Render builds using your existing Dockerfile.
+#   5. Ozonetel WebSocket URL to hand over:
+#         wss://<your-service-name>.onrender.com/ozonetel/stream
+#      (exact <your-service-name> is shown in the Render dashboard after
+#      first deploy — Render may suffix it if the name is taken)
+#
+# NOTE: this assumes your database is Supabase (hosted Postgres) —
+# no separate Postgres service is defined here, unlike docker-compose.yml's
+# local dev setup. If that assumption is wrong, tell me and I'll adjust.
+
+services:
+  - type: web
+    name: gtm-uae-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # cheapest plan with no spin-down — needed since
+                           # calls can arrive any time; the free tier sleeps
+                           # after inactivity, which would drop live calls
+    # Render injects $PORT dynamically (not always 8000) — the start
+    # command MUST bind to it, or the service will fail health checks.
+    dockerCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: EMAIL_ADDRESS
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: UNIPILE_API_KEY
+        sync: false
+      - key: UNIPILE_DSN
+        sync: false
+      - key: UNIPILE_ACCOUNT_ID
+        sync: false
+      # NGROK_AUTH_TOKEN intentionally omitted — the ngrok tunnel becomes
+      # redundant once deployed on Render (Render's own URL is already
+      # public and stable). See the note below about Twilio's webhook host.
