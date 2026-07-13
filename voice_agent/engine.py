@@ -84,11 +84,31 @@ GROQ_API_KEY        = os.getenv("GROQ_API_KEY")
 # Voice for edge-tts — en-US-AriaNeural is warm, professional, free
 TTS_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
 
+# Speech rate — sped up from edge-tts's default pace per explicit latency
+# complaint. This is a purely mechanical fix: it shortens every reply's
+# real playback duration proportionally without changing a single word
+# of the script. A long multi-sentence turn (e.g. the STEP 4 pitch) can
+# easily run 18-20+ real seconds at normal pace once played back in real
+# time — most of what was being perceived as "latency"/"the bot won't
+# stop talking" is actually just how long that much text takes to say
+# out loud, not network or API delay (Groq/TTS themselves respond in
+# under 1-1.5s per sentence throughout these logs).
+TTS_RATE = os.getenv("TTS_RATE", "+15%")
+
 # Groq model — llama-3.3-70b: best quality/cost ratio on Groq
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # ---------------------------------------------------------------------------
-# Deepgram params — Nova-2 English, endpointing at 1500ms silence.
+# Deepgram params — Nova-2 English, endpointing at 700ms silence.
+#
+# Reduced from 1100ms per explicit latency complaint — this delay happens
+# BEFORE _final_transcript_ts is even set, so it was invisible in all the
+# TIMING log lines (which only measure from is_final onward) while still
+# being real dead air the caller experienced on every single turn. 700ms
+# is a reasonable floor — going much lower risks Deepgram treating a
+# natural mid-sentence breath/pause as the end of the utterance and
+# cutting the caller off prematurely. If callers start getting cut off
+# mid-sentence, raise this back up; that's the direct tradeoff being made.
 #
 # interim_results=true is REQUIRED for barge-in detection. Deepgram sends
 # partial transcripts the instant the partner starts making sound — well
@@ -104,7 +124,8 @@ DEEPGRAM_URL = (
     "&punctuate=true"
     "&smart_format=true"
     "&interim_results=true"
-    "&endpointing=1100"
+    "&endpointing=700"
+    "&vad_events=true"
     "&encoding=mulaw"
     "&sample_rate=8000"
     "&channels=1"
@@ -226,7 +247,7 @@ _FAREWELL_PATTERNS = re.compile(
 # System prompt — built from Aarna AI Behaviour & Outreach Script Framework
 # ---------------------------------------------------------------------------
 
-# Category-specific personalized pitch questions — used in STEP 3 instead
+# Category-specific personalized pitch questions — used in STEP 4 instead
 # of the generic "Do you currently list your experiences with any other
 # platforms?" line. Matched by substring against partners.category, so
 # "Desert Safari & Adventure" still matches "desert safari" below.
@@ -260,35 +281,48 @@ _CATEGORY_PITCH_TEMPLATES: list[tuple[str, str]] = [
              "exploring Aarna as well?"),
 ]
 
-_GENERIC_PITCH_TEMPLATE = (
-    "Do you currently list your experiences with any other platforms, and would you be open to "
-    "exploring Aarna as well?"
-)
-
 
 def _personalized_pitch_question(partner_name: str, category: str, company_synopsis: str) -> str:
     """
-    Build the STEP 3 pitch question. Prefers company_synopsis (a real,
-    enrichment-sourced description) when available, falls back to a
-    category-matched template, falls back to the fully generic question
-    only when neither is known. Never invents details not actually given.
+    Build the "reason for calling" + OTA-question line for STEP 4.
+
+    Merged down to exactly 2 sentences (one statement + the question),
+    per the hard cap on sentences-per-turn. Confirmed real failure this
+    fixes: the model was faithfully speaking this content as 3-4 separate
+    short sentences back-to-back with no pause (since that's how many
+    sentences the old template itself was punctuated as, and the model
+    was told to preserve "exact meaning" — which it did, including the
+    sentence count). Same meaning and specifics as before, just phrased
+    as fewer, fuller sentences joined with a dash/conjunction instead of
+    splitting every clause into its own sentence. The question is always
+    its own final sentence — never merged into the statement above it.
+
+    category drives the {category} slot naturally (e.g. "Activities" ->
+    "activities marketplace", "Wellness" -> "wellness marketplace").
+    Falls back to a generic "experiences" wording if category is unknown.
+    Never invents details not actually given.
     """
     partner = partner_name or "your business"
 
+    if category:
+        cat_word = category.strip().lower()
+    else:
+        cat_word = "experiences"
+
     if company_synopsis:
         return (
-            f"I looked into {partner} — {company_synopsis}. I'd love to know a bit more about "
-            f"how things are going there. Do you currently list {partner} with any other "
-            f"platforms, and would you be open to exploring Aarna as well?"
+            f"I looked into {partner} — {company_synopsis} — and we're "
+            f"currently onboarding suppliers like you for our new {cat_word} "
+            f"marketplace, Aarna. Are you currently working with any online "
+            f"travel platforms or marketplaces?"
         )
 
-    if category:
-        cat_lower = category.lower()
-        for keyword, template in _CATEGORY_PITCH_TEMPLATES:
-            if keyword in cat_lower:
-                return template.format(partner=partner)
-
-    return _GENERIC_PITCH_TEMPLATE
+    return (
+        f"We're currently onboarding suppliers for our new {cat_word} "
+        f"marketplace, Aarna, and came across {partner} as a great fit. "
+        f"Are you currently working with any online travel platforms or "
+        f"marketplaces?"
+    )
 
 
 def _system_prompt(
@@ -300,19 +334,25 @@ def _system_prompt(
     """
     Build the system prompt for the live call.
 
-    Rewritten to be SHORT and CRISP per explicit instruction — the agent
-    was speaking too much immediately after the partner picked up, with a
-    long multi-step scripted pitch (stats, pricing, launch-partner framing)
-    that added no value early in the call. New flow:
+    Exact required script — separate turns for identity confirmation,
+    good-time check, then reason-for-calling (with category-specific
+    marketplace wording), then scheduling. New flow:
 
-        (opening already spoken via TwiML) ->
-        AI disclosure + confirm who I'm speaking with ->
-        one to-the-point PERSONALIZED question about their business ->
-        offer + schedule a human-agent call ->
-        close
-
-    AI disclosure is back with EXACT required wording (previously removed
-    per a different instruction — that decision is superseded here).
+        (opening now spoken via our own pipeline over the WebSocket,
+         not Twilio's <Say> — fixes the recording missing the opening) ->
+        STEP 1: identity confirmed ->
+        STEP 2: "is it a good time?" (its own turn) ->
+        STEP 3: branch on good-time answer; if yes, go straight into
+                STEP 4 in the same turn (no separate AI-disclosure turn
+                anymore — flagged explicitly per the latest exact script;
+                previously this WAS its own turn, then was removed, then
+                re-added — if AI disclosure is still needed for compliance
+                in some regions, it should come back as an inline clause
+                within this same turn rather than its own turn) ->
+        STEP 4: reason for calling + OTA question (exact wording,
+                category-driven) ->
+        STEP 5: offer + schedule a human-agent call ->
+        STEP 6: confirm + close
 
     Explicit anti-hallucination guardrail added: the agent must never
     invent pricing, commission rates, or other specific details it wasn't
@@ -328,7 +368,7 @@ def _system_prompt(
       - hyperlocal:  home chefs, workshops, art studios, boutique fitness
 
     category: business vertical (e.g. "Restaurant", "Hotel & Resort") —
-      drives the personalized STEP 3 pitch question. Optional.
+      drives the personalized STEP 4 pitch question. Optional.
     company_synopsis: factual 1-2 sentence description of what this
       specific business does, from real enrichment data only. Optional —
       most partners won't have this until an enrichment step generates it.
@@ -372,6 +412,53 @@ react to specific words or details they just used. If you find yourself
 about to say something that would make sense regardless of what they just
 said, stop and rewrite it to reference their actual words.
 
+CRITICAL — NEVER REPEAT CONTENT YOU HAVE ALREADY SAID:
+Before every reply, check the conversation history above. If you have
+ALREADY said a point earlier in this same call, do NOT say it again —
+even after an interruption, a confusing or unclear response from the
+supplier, or a detour into answering a question. Confirmed real failures
+this causes if not followed:
+- After being interrupted mid-way through STEP 4, the agent restarted
+  the ENTIRE STEP 4 pitch from the beginning, saying the exact same
+  sentences twice.
+- After answering "what is Aarna" mid-way through STEP 5, the agent
+  re-asked the exact same STEP 5 scheduling question it had already
+  asked minutes earlier, verbatim — and did this a THIRD time later in
+  the same call.
+- The supplier was mid-way through hearing the "what is Aarna" answer
+  and said something encouraging like "Yeah, I would love to [hear
+  more]" WHILE the agent was still talking. This is normal backchannel
+  encouragement to keep going, not a request to stop or change subject
+  — but it still triggers the interruption mechanism (any real
+  transcribed speech can cut the agent off, by design, since telling a
+  genuine interruption apart from encouragement isn't reliable). The
+  agent's WRONG response was to abandon the explanation entirely and
+  jump back to the STEP 5 scheduling question. Later, asked again, it
+  then repeated the exact same first sentence of the explanation from
+  scratch instead of continuing or building on it.
+All of these are repetition/abandonment failures, not correct behaviour.
+Instead:
+- If interrupted mid-explanation and the supplier's response sounds like
+  encouragement or agreement to keep listening ("yeah", "I'd love to",
+  "please continue", "tell me more", or similar short affirmations, NOT
+  a new question or objection) — CONTINUE the explanation from roughly
+  where you left off, in your own words. Do not restart it, do not
+  abandon it for an unrelated next step, and do not repeat a sentence
+  you already said — say the REMAINING point you hadn't gotten to yet.
+- If interrupted mid-pitch and the supplier's response doesn't clearly
+  answer or continue anything (garbled, nonsensical, unrelated), do NOT
+  restart the pitch from the top. Ask ONE short clarifying question
+  instead — "Sorry, could you say that again?" — and wait.
+- If you already asked a specific question earlier in the call (e.g. the
+  STEP 5 scheduling question) and a detour happened since (like
+  answering "what is Aarna"), do NOT re-ask it with the identical
+  wording. Briefly bridge back instead — e.g. "So, back to what I was
+  asking — would tomorrow work?" — shorter than the original, not a
+  repeat of it.
+- When genuinely unsure whether something was already said, default to
+  a SHORTER, differently-worded next step rather than repeating a full
+  sentence you may have already used.
+
 CRITICAL — NEVER HALLUCINATE:
 If the supplier asks something you don't have a clear, explicit answer for
 in this prompt (exact pricing, commission percentages, contract terms,
@@ -380,94 +467,128 @@ invent an answer or guess. Say something like: "That's a great question —
 I'll make sure our partnership lead covers that on your call." Then move
 on. Never fill a gap with a plausible-sounding but made-up detail.
 
-This deferral phrase is ONLY for genuine unanswered questions. It must
-NEVER be used in reply to a plain scheduling statement — a date, a time,
-"yes that works", "tomorrow at 2", or similar. Those get a short, direct
-confirmation ONLY (e.g. "Perfect, 2PM tomorrow works — I'll send the
-invite."), with no deferral phrase attached, even if you used the
-deferral phrase earlier in this same call for a different, unrelated
-question. Each reply must be judged only on what was JUST said, not on
-carrying over a pattern from a previous turn.
+This deferral phrase is ONLY for genuine unanswered questions about
+SPECIFIC facts you were not given (exact numbers, pricing, contract
+terms). It must NEVER be used in reply to a plain scheduling statement —
+a date, a time, "yes that works", "tomorrow at 2", or similar. Those get
+a short, direct confirmation ONLY (e.g. "Perfect, 2PM tomorrow works —
+I'll send the invite."), with no deferral phrase attached, even if you
+used the deferral phrase earlier in this same call for a different,
+unrelated question. Each reply must be judged only on what was JUST
+said, not on carrying over a pattern from a previous turn.
+
+The deferral phrase is ALSO the wrong response in these common cases —
+confirmed real failures where it was misused, do not repeat them:
+- An INCOMPLETE sentence that trails off ("before we set up a meeting, I
+  want—") is NOT a question at all. Do not deploy the deferral phrase on
+  a fragment. Instead say something like "Sorry, go ahead" or "You were
+  saying?" and wait for them to finish.
+- "What is this call about?" / "What's the purpose of this call?" IS
+  answerable — you already have the purpose statement from STEP 4. Give
+  it directly, no deferral needed.
+- NEVER use this exact phrase more than twice in one call. If a third
+  similar question comes up, do not repeat the same sentence again —
+  either answer with what you actually do know, or simply say "I don't
+  have that detail handy, but I'll flag it for the call" using different
+  wording, so the call doesn't sound like a broken record.
+
+WHAT IS AARNA — exact answer, use whenever asked "what is Aarna",
+"tell me about Aarna", "what does Aarna do", "how does this work", "how
+will this help me", or anything else asking what Aarna actually is or
+does. This is a fully answerable question — always give this exact
+answer, never defer it. Merged to 2 sentences (was previously 4 short
+ones spoken back-to-back with no pause — same fix as STEP 4 below):
+"Aarna is a travel management platform — rather than just relying on
+customers visiting our website, we also distribute experiences through
+Mondee's global network of over 65,000 travel advisors, plus corporate
+and enterprise channels. That gives suppliers like you more ways to
+reach new customers."
 
 ═══════════════════════════════════════════════════════════════
-CALL FLOW — SHORT AND CRISP. NO LONG EXPLANATIONS AT ANY STEP.
+CALL FLOW — EXACT SCRIPT. FOLLOW STEP BY STEP, ONE TURN EACH.
 ═══════════════════════════════════════════════════════════════
-The opening line has ALREADY been spoken before you say anything:
-"Hi, this is Sania calling from Aarna, our travel management platform.
-Am I speaking with [name/company]?"
+The opening line has ALREADY been spoken before you say anything (now
+sent through your own voice, not a separate system):
+"Hi, I am Sania from Aarna - a travel management platform. Are you
+[name] from [company]?"
 
 If there was no response at all, a short "Hello? Are you there?" check-in
 has ALSO already played automatically — you don't need to say this
 yourself, it happens before you get involved.
 
-Your job starts with THEIR response to the opening. Follow this flow,
-one step at a time, waiting for and reacting to their actual answer
-before moving to the next step. Every step is ONE short sentence or two
-at most — never explain, elaborate, or pitch at length.
+Your job starts with THEIR response to the opening. Follow this flow
+EXACTLY, one step at a time. WAIT for each response to genuinely finish
+before you reply — never jump in on a pause, never respond to a partial
+thought. Every step is ONE short sentence or two at most.
 
-STEP 1 — Confirm you're understood, then check timing.
-- If their response is unclear, garbled, or asks you to repeat yourself
-  ("sorry, who?", "come again?", "can't hear you"), repeat the opening
-  briefly and add the good-time check: "This is Sania from Aarna — is
-  now a good time to speak?" Do this only once; if still unclear a
-  second time, politely end the call.
-- If they confirm they can hear you (a name, "yes", "speaking", etc.),
-  ask directly: "Is now a good time to speak?"
+STEP 1 — They confirm their identity (a name, "yes", "speaking", etc.).
+If unclear or they ask you to repeat, briefly repeat the opening once;
+if still unclear a second time, politely end the call. Otherwise, once
+confirmed, move immediately to STEP 2 — do not add anything else in
+this turn.
 
-STEP 2 — Branch on their answer to the good-time check.
+STEP 2 — Ask directly: "Is it a good time to talk?" Nothing else in this
+turn. Wait for their answer in full before continuing.
+
+STEP 3 — Branch on their answer to the good-time check.
 - If NOT a good time (busy, later, no): do not push forward. Offer a
   calendar invite instead: "No problem — would it help if I sent a
   calendar invite so we can find a better time?" Capture a preferred
   day/time if they give one, otherwise just confirm you'll send
   something by email, then close warmly.
-- If it IS a good time: re-confirm who you're speaking with in one
-  breath, disclose AI status, and state your purpose — all in one short
-  turn. Say something like: "Great — am I speaking with [name]? Just so
-  you know, I'm an AI assistant for Aarna. I'd like to speak with you
-  about a partnership opportunity with Aarna." Keep this to one turn,
-  then move to STEP 3.
+- If it IS a good time: go DIRECTLY into STEP 4 in this SAME turn — do
+  not stop and wait for a separate response in between. There is no
+  standalone disclosure turn anymore; move straight to the reason for
+  calling below.
 
-STEP 3 — Gauge INTEREST directly — cut to the point, no pitch yet.
-Ask this question, adapted naturally in your own words but keeping its
-exact meaning and specifics — do not revert to a generic question about
-"your experiences" if a personalized one is given below:
+STEP 4 — Say this exactly, adapted naturally in your own words but
+keeping its exact meaning and specifics — do not revert to a generic
+question about "your experiences" if a personalized one is given below:
 
 "{pitch_question}"
 
-Listen for genuine interest vs disinterest in their answer — this is the
-single most important branch in the call:
-- If they sound INTERESTED (curious, asking questions, willing to hear
-  more): give ONE brief, concrete sentence about what Aarna does (no
-  stats, no pricing — save that for the human call), then move straight
-  then move straight to STEP 4 (schedule). Do not linger here or add a second sentence.
-- If they sound NOT INTERESTED (dismissive, "not right now", "we're
-  fine", no genuine curiosity): do not push or re-pitch. Acknowledge
-  politely and offer once to send information by email instead of
-  continuing to press for a call. If they decline that too, close the
-  call warmly without scheduling anything.
+Wait for their full answer before responding. Listen for what they
+actually said, but the DEFAULT next step is STEP 5 (arrange the human
+call) regardless of whether they're already on other platforms — being
+on other platforms is not a reason to stop, it's just useful context.
+Only deviate from moving to STEP 5 in these specific cases:
+- If they ask what Aarna is (very likely here, e.g. "I'd love to know
+  what Aarna is"): give the exact "WHAT IS AARNA" answer from above,
+  THEN continue to STEP 5 in the same or next turn — do not skip
+  scheduling just because they asked a question first.
+- If they sound clearly NOT INTERESTED (dismissive, "not right now",
+  "we're fine", explicitly declining): do not push or re-pitch.
+  Acknowledge politely and offer once to send information by email
+  instead of continuing to press for a call. If they decline that too,
+  close the call warmly without scheduling anything.
 - If what they describe is CLEARLY unrelated to UAE experiences/
   activities (software, retail, unrelated professional services,
-  manufacturing, etc.), this is a fit problem, not an interest problem —
-  say something like: "Ah, that's not quite the right fit for Aarna,
-  which focuses on UAE experience and activity providers — apologies
-  for the mix-up, and thanks for your time! Have a wonderful day!" Then
-  end the call. Ask one clarifying question first if genuinely unsure
-  rather than guessing either way.
+  manufacturing, etc.), this is a fit problem — say something like:
+  "Ah, that's not quite the right fit for Aarna, which focuses on UAE
+  experience and activity providers — apologies for the mix-up, and
+  thanks for your time! Have a wonderful day!" Then end the call. Ask
+  one clarifying question first if genuinely unsure rather than
+  guessing either way.
 
-STEP 4 — Offer and schedule the human-agent call. Say something like:
-"I'd like to set up a short call with one of our partnership leads to
-walk you through everything — would sometime this week or next work?"
-Once they agree, ask: "What day and time works best for you?" Capture
-their answer clearly and repeat it back to confirm you heard it right.
-When they state a date/time, this is a plain scheduling answer, not a
-question — respond with a direct confirmation only, never the deferral
-phrase from the anti-hallucination rule above.
+STEP 5 — Offer and schedule the human-agent call. Say something like:
+"I can arrange for a human partnerships team member to reach out to
+you — would you be available for a call tomorrow, or would you prefer
+a different time?" Once they agree, capture their preferred day/time
+clearly and repeat it back to confirm you heard it right. When they
+state a date/time, this is a plain scheduling answer, not a question —
+respond with a direct confirmation only, never the deferral phrase from
+the anti-hallucination rule above.
 
-STEP 5 — Confirm and close. Say something like: "Perfect, I'll send a
+STEP 6 — Confirm and close. Say something like: "Perfect, I'll send a
 calendar invite to your email. Have a wonderful day!"
 
 TONE:
-- Short. Crisp. To the point. Every reply 1 sentence, occasionally 2.
+- Short. Crisp. To the point. HARD CAP: never more than 2 sentences in a
+  single turn, no exceptions — including for the STEP 4 pitch and the
+  WHAT IS AARNA answer below, both already written as 2 sentences for
+  exactly this reason. If you're ever tempted to add a 3rd sentence,
+  merge it into one of the first two with a dash or "and" instead of
+  speaking it separately.
 - One question per turn — never stack multiple questions together.
 - {tone_guidance}
 
@@ -580,7 +701,7 @@ async def _tts_to_mulaw(text: str) -> bytes:
     with miniaudio (handles resample from 24 kHz → 8 kHz internally).
     Total added latency: ~300-600 ms for a short sentence (network + decode).
     """
-    communicate = edge_tts.Communicate(text, voice=TTS_VOICE)
+    communicate = edge_tts.Communicate(text, voice=TTS_VOICE, rate=TTS_RATE)
     mp3_chunks: list[bytes] = []
 
     async for chunk in communicate.stream():
@@ -631,20 +752,34 @@ class _CallRecorder:
     never both at once even during real overlap/barge-in moments).
 
     Approach: maintain two small PCM16 sample buffers (one per direction).
-    Every time EITHER side delivers a chunk, we top up that side's buffer.
-    A periodic flush takes the next _FRAME_SAMPLES worth of audio from
-    BOTH buffers (zero-filling whichever side has less queued), sums them
-    sample-by-sample with clipping, and writes ONE mixed frame to disk.
-    This keeps memory flat (only ever holds a few hundred ms of buffered
-    audio, never the whole call) while producing a correctly mixed,
-    chronologically accurate recording — including real overlapping
-    speech during barge-in moments.
+    Writes just top up whichever side's buffer. A BACKGROUND TASK running
+    on a real 20ms wall-clock schedule (see _periodic_flush_loop) drains
+    exactly one frame per real tick — zero-filling whichever side has
+    nothing queued at that instant — and writes it to disk.
+
+    FIX (2026-07-12): this used to flush REACTIVELY — every write() call
+    immediately drained however many complete frames were queued. That
+    was fine for partner audio (Twilio delivers it in real time anyway),
+    but agent (TTS) audio is dispatched to Twilio in a fast burst (see
+    _send_tts_reply) — an entire sentence's audio can land in this
+    recorder's buffer within milliseconds. Reactive flushing wrote all of
+    it to the WAV file immediately, advancing the recording's timeline by
+    however many seconds that sentence represents — INSTANTLY, in
+    wall-clock terms. But real time hadn't actually elapsed yet: Twilio
+    kept streaming the caller's real mic audio for that same span as it
+    actually happened, which got written as MORE frames once it arrived,
+    since the agent buffer was already empty by then. The same real
+    interval ended up represented twice — confirmed real case: a 112s
+    call produced a 160s recording, a ~48s inflation matching roughly how
+    long the agent spent talking that call. Writing frames on a genuine,
+    drift-corrected wall-clock schedule instead of reactively fixes this:
+    a burst of agent audio just sits in the buffer and gets drained at
+    the correct natural pace, exactly like partner audio already was.
     """
 
-    # 20ms at 8kHz = 160 samples — matches Twilio's native frame size,
-    # so flushing at this granularity introduces no extra latency or
-    # buffering beyond what Twilio already does internally.
+    # 20ms at 8kHz = 160 samples — matches Twilio's native frame size.
     _FRAME_SAMPLES = 160
+    _FRAME_DURATION_S = _FRAME_SAMPLES / 8000.0   # 0.02s
 
     def __init__(self, call_sid: str):
         self.call_sid = call_sid
@@ -654,6 +789,7 @@ class _CallRecorder:
         self._agent_buf   = bytearray()   # PCM16 bytes, agent side
         self._frames_written = 0
         self._lock = asyncio.Lock()
+        self._flush_task: "asyncio.Task | None" = None
 
     def _ensure_open(self) -> None:
         if self._wav is None:
@@ -662,51 +798,70 @@ class _CallRecorder:
             self._wav.setsampwidth(2)   # 16-bit PCM
             self._wav.setframerate(8000)
 
+    def start(self) -> None:
+        """Begin the real-time periodic flush loop. Call once per recorder."""
+        if self._flush_task is None:
+            self._flush_task = asyncio.create_task(self._periodic_flush_loop())
+
+    async def _periodic_flush_loop(self) -> None:
+        """
+        Writes exactly one mixed frame per real 20ms tick, for the life of
+        the call. Uses an absolute schedule (start + tick*frame_duration)
+        rather than repeated sleep(0.02) calls, so small scheduling
+        overhead each iteration can't accumulate into meaningful drift
+        over a multi-minute call.
+        """
+        start = time.monotonic()
+        tick = 0
+        try:
+            while True:
+                tick += 1
+                target = start + tick * self._FRAME_DURATION_S
+                now = time.monotonic()
+                if target > now:
+                    await asyncio.sleep(target - now)
+                async with self._lock:
+                    self._write_one_frame()
+        except asyncio.CancelledError:
+            pass
+
+    def _write_one_frame(self) -> None:
+        """Write exactly one mixed frame from whatever is currently queued."""
+        frame_bytes = self._FRAME_SAMPLES * 2  # 2 bytes per PCM16 sample
+
+        p_chunk = bytes(self._partner_buf[:frame_bytes])
+        a_chunk = bytes(self._agent_buf[:frame_bytes])
+        del self._partner_buf[:frame_bytes]
+        del self._agent_buf[:frame_bytes]
+
+        if len(p_chunk) < frame_bytes:
+            p_chunk += b"\x00" * (frame_bytes - len(p_chunk))
+        if len(a_chunk) < frame_bytes:
+            a_chunk += b"\x00" * (frame_bytes - len(a_chunk))
+
+        mixed = self._mix_pcm16(p_chunk, a_chunk)
+        self._ensure_open()
+        self._wav.writeframes(mixed)
+        self._frames_written += 1
+
     async def write_partner_mulaw(self, mulaw_bytes: bytes) -> None:
         """Queue partner audio for mixing. Decoded to PCM16 immediately."""
         if not mulaw_bytes:
             return
         async with self._lock:
             self._partner_buf.extend(_mulaw_to_pcm16(mulaw_bytes))
-            await self._flush_ready_frames()
 
     async def write_agent_mulaw(self, mulaw_bytes: bytes) -> None:
-        """Queue agent (TTS) audio for mixing. Decoded to PCM16 immediately."""
+        """
+        Queue agent (TTS) audio for mixing. Decoded to PCM16 immediately.
+        Deliberately does NOT flush here (see class docstring) — a burst
+        of agent audio just sits here until the periodic loop drains it
+        at the correct real-time pace.
+        """
         if not mulaw_bytes:
             return
         async with self._lock:
             self._agent_buf.extend(_mulaw_to_pcm16(mulaw_bytes))
-            await self._flush_ready_frames()
-
-    async def _flush_ready_frames(self) -> None:
-        """
-        Mix and write out as many complete frames as both buffers can
-        support, zero-padding whichever side is currently shorter.
-        Called after every write — keeps buffers from growing unbounded.
-        """
-        frame_bytes = self._FRAME_SAMPLES * 2  # 2 bytes per PCM16 sample
-
-        # Only flush while at least ONE side has a full frame ready —
-        # this prevents a fast-talking side from racing far ahead of a
-        # quiet side while still keeping latency low (max ~20ms held back).
-        while len(self._partner_buf) >= frame_bytes or len(self._agent_buf) >= frame_bytes:
-            p_chunk = bytes(self._partner_buf[:frame_bytes]) if self._partner_buf else b""
-            a_chunk = bytes(self._agent_buf[:frame_bytes]) if self._agent_buf else b""
-
-            # Zero-pad the shorter side up to a full frame
-            if len(p_chunk) < frame_bytes:
-                p_chunk += b"\x00" * (frame_bytes - len(p_chunk))
-            if len(a_chunk) < frame_bytes:
-                a_chunk += b"\x00" * (frame_bytes - len(a_chunk))
-
-            mixed = self._mix_pcm16(p_chunk, a_chunk)
-
-            self._ensure_open()
-            self._wav.writeframes(mixed)
-            self._frames_written += 1
-
-            del self._partner_buf[:frame_bytes]
-            del self._agent_buf[:frame_bytes]
 
     @staticmethod
     def _mix_pcm16(a: bytes, b: bytes) -> bytes:
@@ -719,22 +874,29 @@ class _CallRecorder:
         return audioop.add(a, b, 2)
 
     async def close(self) -> "str | None":
-        """Flush any remaining buffered audio, finalise the WAV, return its path."""
+        """Stop the periodic loop, flush any final partial frame, finalise the WAV."""
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+            self._flush_task = None
+
         async with self._lock:
-            # Final flush — pad out whatever partial frame remains so we
-            # don't lose the last <20ms of audio from either side.
+            # Drain any remaining COMPLETE frames first — the periodic
+            # loop may have been cancelled with more than one frame's
+            # worth still queued (e.g. a burst that arrived right as the
+            # call ended), and those still represent real audio that
+            # should be kept, not discarded.
             frame_bytes = self._FRAME_SAMPLES * 2
+            while len(self._partner_buf) >= frame_bytes or len(self._agent_buf) >= frame_bytes:
+                self._write_one_frame()
+
+            # Final partial frame — pad out whatever's left (<20ms from
+            # either side) so we don't lose it entirely.
             if self._partner_buf or self._agent_buf:
-                p_chunk = bytes(self._partner_buf) + b"\x00" * max(0, frame_bytes - len(self._partner_buf))
-                a_chunk = bytes(self._agent_buf)   + b"\x00" * max(0, frame_bytes - len(self._agent_buf))
-                p_chunk = p_chunk[:frame_bytes]
-                a_chunk = a_chunk[:frame_bytes]
-                mixed = self._mix_pcm16(p_chunk, a_chunk)
-                self._ensure_open()
-                self._wav.writeframes(mixed)
-                self._frames_written += 1
-                self._partner_buf.clear()
-                self._agent_buf.clear()
+                self._write_one_frame()
 
             if self._wav is not None:
                 self._wav.close()
@@ -993,10 +1155,21 @@ async def place_call(
 async def twilio_outbound(request: Request):
     """
     Twilio calls this URL when the partner picks up.
-    We respond with TwiML that:
-      1. Says the opening line (Twilio Polly TTS — instant, no latency)
-      2. Opens a bidirectional media stream to our WebSocket
-    The WS handler takes over from there for the full conversation.
+    We respond with TwiML that opens the bidirectional media stream
+    IMMEDIATELY — no Twilio <Say> verb before it.
+
+    CRITICAL: the opening line is no longer spoken via Twilio's native
+    <Say> verb. It is now sent through our OWN TTS pipeline once the
+    WebSocket connects (see audio_stream() -> recv_from_twilio()'s
+    "start" event handler). This fixes a real bug: our CallRecorder only
+    captures audio flowing through the bidirectional media stream —
+    anything spoken via <Say> happens BEFORE that stream exists and was
+    structurally invisible to the recorder, making it look like
+    "recording only starts after the client speaks" when actually the
+    agent's own opening line was simply never being captured at all.
+    Speaking it through our own pipeline also means barge-in detection
+    is active from the very first word, instead of only starting once
+    the (now-removed) <Say> + pause finished.
     """
     form = await request.form()
     call_sid = form.get("CallSid", "unknown")
@@ -1005,17 +1178,11 @@ async def twilio_outbound(request: Request):
     await _db_upsert_call(call_sid, status="connected", from_number=form.get("From", ""))
     logger.info("Call connected SID=%s", call_sid)
 
-    response = VoiceResponse()
-
-    # Opening line — HARDCODED, exact wording per explicit instruction.
-    # Do not paraphrase or let the LLM regenerate this; it's spoken via
-    # Twilio Polly before the LLM/WS conversation even starts.
+    # Opening line — exact wording per explicit instruction. Stored on
+    # meta and spoken later via our own pipeline (see above), not here.
     #
-    # Full form (both name and company known):
-    #   "Hi, I am Sania, an AI assistant from Aarna - a travel management
-    #    platform. Am I talking with {client_name} from {company_name}?
-    #    Are you the right person to discuss the partnership with you
-    #    for {company_name}?"
+    # "Hi, I am Sania from Aarna - a travel management platform. Are you
+    #  {client_name} from {company_name}?"
     #
     # Degrades gracefully when contact_name and/or partner_name are
     # missing, rather than saying "None" or leaving an awkward blank.
@@ -1024,32 +1191,28 @@ async def twilio_outbound(request: Request):
 
     if contact_name and partner_name:
         opening = (
-            f"Hi, I am Sania, an AI assistant from Aarna - a travel "
-            f"management platform. Am I talking with {contact_name} from "
-            f"{partner_name}? Are you the right person to discuss the "
-            f"partnership with you for {partner_name}?"
+            f"Hi, I am Sania from Aarna - a travel management platform. "
+            f"Are you {contact_name} from {partner_name}?"
         )
     elif partner_name:
         opening = (
-            f"Hi, I am Sania, an AI assistant from Aarna - a travel "
-            f"management platform. Am I speaking with the right person "
-            f"at {partner_name}? Are you the person to discuss the "
-            f"partnership with you for {partner_name}?"
+            f"Hi, I am Sania from Aarna - a travel management platform. "
+            f"Am I speaking with the right person at {partner_name}?"
         )
     else:
         opening = (
-            "Hi, I am Sania, an AI assistant from Aarna - a travel "
-            "management platform. Am I speaking with the right person "
-            "to discuss a potential partnership?"
+            "Hi, I am Sania from Aarna - a travel management platform. "
+            "Am I speaking with the right person to discuss a potential "
+            "partnership?"
         )
 
     opening = meta.get("script") or opening
-    response.say(opening, voice="Polly.Joanna-Neural", language="en-US")
+    meta["opening_line"] = opening
 
-    # Pause briefly so the greeting finishes before the stream opens
-    response.pause(length=1)
+    response = VoiceResponse()
 
-    # Open bidirectional media stream — Twilio will send AND receive audio on this WS
+    # Open bidirectional media stream immediately — no <Say>, no pause.
+    # The opening line is spoken over this same stream once it connects.
     connect = Connect()
     stream = Stream(url=f"wss://{PUBLIC_HOST}/ws/audio/{call_sid}")
     stream.parameter(name="callSid", value=call_sid)
@@ -1153,9 +1316,37 @@ async def audio_stream(ws: WebSocket, call_sid: str):
     # Call recorder — streams both audio directions to a single WAV file
     # on disk in real time. None if recording is disabled via env var.
     recorder = _CallRecorder(call_sid) if RECORDING_ENABLED else None
+    if recorder is not None:
+        recorder.start()
 
     # _speaking: True while we're generating + sending TTS audio.
     _speaking = False
+    # Wall-clock time the FIRST actual audio chunk was sent to Twilio —
+    # i.e. when the caller could first possibly hear anything. Deliberately
+    # NOT set at the top of _send_tts_reply (before TTS synthesis runs):
+    # synthesis alone can take 1-2+ seconds during which NO audio has
+    # reached the caller at all, so any "barge-in" detected during that
+    # window is necessarily a false positive (background noise, line
+    # artifact) — there is nothing yet for the caller to be interrupting.
+    # Stays 0.0 (falsy) for the whole synthesis phase, which means the
+    # barge-in checks below simply don't fire at all until real audio has
+    # started, rather than needing a grace window measured from the wrong
+    # starting point. This is the fix for a confirmed real case: a
+    # "Barge-in signal (VAD)" fired ~600ms after TTS synthesis STARTED
+    # (well before the ~1954ms synthesis even finished, so zero audio had
+    # been sent yet) and silently discarded the entire reply before the
+    # send-loop's first chunk.
+    _speaking_started_at: float = 0.0
+    # Minimum time the agent must have been speaking before a barge-in
+    # signal is trusted. Without this, the caller's own phone mic picking
+    # up an echo of the agent's OWN voice (very common on real phone
+    # lines without hardware echo cancellation) gets misread as the
+    # caller interrupting almost instantly — cutting the agent off before
+    # it ever gets a full sentence out. This was very likely the actual
+    # cause of "the agent wasn't speaking anything" — audio WAS generated
+    # and sent, but a self-triggered false barge-in wiped it from Twilio's
+    # buffer within a fraction of a second.
+    _BARGE_IN_GRACE_S = 0.7
     # _interrupt_flag: set True the instant the partner starts talking while
     # _speaking is True. Checked by the TTS chunk loop to abort mid-stream.
     _interrupt_flag = False
@@ -1171,8 +1362,19 @@ async def audio_stream(ws: WebSocket, call_sid: str):
     # not in our pipeline at all.
     _last_audio_recv_ts = time.monotonic()
     # _final_transcript_ts: set the moment Deepgram emits is_final=True.
-    # This is t=0 for everything downstream (Groq, TTS, send).
+    # This is t=0 for the WHOLE reply (used for the "Groq first sentence
+    # ready" metric, which is meant to be utterance-level).
     _final_transcript_ts: float = 0.0
+    # _sentence_ref_ts: reset before EACH sentence in a multi-sentence
+    # reply, right before that sentence is sent to _send_tts_reply. Used
+    # for the TTS-synth/audio-ready timing logs so they report real
+    # PER-SENTENCE delay. Without this, those logs used
+    # _final_transcript_ts for every sentence, so a later sentence in a
+    # long reply reported a misleadingly huge cumulative number (the
+    # elapsed time for the WHOLE reply so far, not that sentence's own
+    # delay) — confirmed real case: "END-TO-END: 20125ms" on a 4th
+    # sentence that individually only took ~950ms to synthesize.
+    _sentence_ref_ts: float = 0.0
 
     async def _send_tts_reply(text: str, stream_sid: str) -> bool:
         """
@@ -1181,9 +1383,10 @@ async def audio_stream(ws: WebSocket, call_sid: str):
         by a barge-in (caller can check this to decide how to handle the
         next turn).
         """
-        nonlocal _speaking, _interrupt_flag
+        nonlocal _speaking, _interrupt_flag, _speaking_started_at
         _interrupt_flag = False
         _speaking = True
+        _speaking_started_at = 0.0   # stays 0 until first chunk actually sent — see comment above
         completed = True
 
         # ── Timing: TTS synthesis stage ──────────────────────────────────
@@ -1194,13 +1397,14 @@ async def audio_stream(ws: WebSocket, call_sid: str):
             t_tts_done = time.monotonic()
             tts_synth_ms = (t_tts_done - t_tts_start) * 1000
 
-            # If we know when the final transcript landed, log the FULL
-            # chain latency: transcript -> TTS audio ready. This isolates
-            # whether edge-tts itself is the slow stage.
-            if _final_transcript_ts:
-                total_to_audio_ready_ms = (t_tts_done - _final_transcript_ts) * 1000
+            # If we know when this sentence became ready to speak, log the
+            # FULL chain latency for THIS sentence: ready -> TTS audio ready.
+            # This isolates whether edge-tts itself is the slow stage, per
+            # sentence — not cumulative across a whole multi-sentence reply.
+            if _sentence_ref_ts:
+                total_to_audio_ready_ms = (t_tts_done - _sentence_ref_ts) * 1000
                 logger.info(
-                    "TIMING SID=%s — TTS synth: %.0fms | transcript→audio_ready: %.0fms",
+                    "TIMING SID=%s — TTS synth: %.0fms | sentence→audio_ready: %.0fms",
                     call_sid, tts_synth_ms, total_to_audio_ready_ms,
                 )
             else:
@@ -1235,10 +1439,11 @@ async def audio_stream(ws: WebSocket, call_sid: str):
                     # moment. Logged once per reply, not per chunk.
                     if not first_chunk_sent:
                         first_chunk_sent = True
-                        if _final_transcript_ts:
-                            total_e2e_ms = (time.monotonic() - _final_transcript_ts) * 1000
+                        _speaking_started_at = time.monotonic()   # real audio starts NOW
+                        if _sentence_ref_ts:
+                            total_e2e_ms = (time.monotonic() - _sentence_ref_ts) * 1000
                             logger.info(
-                                "TIMING SID=%s — END-TO-END (transcript final → first audio sent): %.0fms",
+                                "TIMING SID=%s — END-TO-END this sentence (ready → first audio sent): %.0fms",
                                 call_sid, total_e2e_ms,
                             )
 
@@ -1248,7 +1453,52 @@ async def audio_stream(ws: WebSocket, call_sid: str):
                     # by a barge-in (we only record what was actually played).
                     if recorder is not None:
                         await recorder.write_agent_mulaw(chunk)
-                    await asyncio.sleep(0)  # yield to event loop between chunks
+
+                    # REVERTED to a plain yield (not a real per-chunk delay).
+                    # A previous fix paced this at exactly chunk_duration_s
+                    # per chunk to keep `_speaking` accurate — but that
+                    # removed all buffer slack: Twilio, Deepgram, the
+                    # recorder, and DB writes all share this event loop, and
+                    # ANY scheduling jitter meant a chunk could arrive after
+                    # its predecessor finished playing, causing audible
+                    # gaps/choppiness. Confirmed real complaint: "the voice
+                    # is extremely breaking." Dispatch is fast again (fills
+                    # Twilio's buffer immediately, immune to our own jitter);
+                    # `_speaking` accuracy is now maintained separately below
+                    # by waiting out the real remaining duration AFTER all
+                    # chunks are sent, instead of pacing the sends themselves.
+                    await asyncio.sleep(0)
+
+                # ── Wait out the REAL remaining playback duration ─────────
+                # All chunks are now sent (Twilio has the full buffer and
+                # will play it smoothly at its own pace). But `_speaking`
+                # must stay True until that audio actually finishes playing
+                # — otherwise barge-in/silence-nudge logic goes back to
+                # reading a flag that doesn't reflect reality (the original
+                # bug). Poll in short steps so a barge-in signal arriving
+                # near the end of playback still gets caught promptly and
+                # can still send a `clear` event.
+                if completed and mulaw:
+                    total_audio_duration_s = len(mulaw) / 8000.0
+                    elapsed_dispatch_s = time.monotonic() - t_tts_done
+                    remaining_s = total_audio_duration_s - elapsed_dispatch_s
+                    poll_s = 0.15
+                    waited_s = 0.0
+                    while remaining_s - waited_s > 0:
+                        if _interrupt_flag:
+                            logger.info(
+                                "Barge-in detected during playback tail SID=%s — cutting off",
+                                call_sid,
+                            )
+                            try:
+                                await ws.send_text(_clear_message(stream_sid))
+                            except Exception:
+                                pass
+                            completed = False
+                            break
+                        step_s = min(poll_s, remaining_s - waited_s)
+                        await asyncio.sleep(step_s)
+                        waited_s += step_s
         except Exception as exc:
             logger.error("TTS send error SID=%s: %s", call_sid, exc)
         finally:
@@ -1259,7 +1509,7 @@ async def audio_stream(ws: WebSocket, call_sid: str):
         """
         Process one STT utterance through intent detection → LLM → TTS pipeline.
         """
-        nonlocal _speaking, _interrupt_flag, _last_utterance_ts, _final_transcript_ts
+        nonlocal _speaking, _interrupt_flag, _last_utterance_ts, _final_transcript_ts, _sentence_ref_ts
         _last_utterance_ts = asyncio.get_event_loop().time()
 
         # ── Timing: this is t=0 for the whole reply pipeline ─────────────
@@ -1377,12 +1627,14 @@ async def audio_stream(ws: WebSocket, call_sid: str):
 
         async for sentence in _llm_reply_stream(meta["history"]):
             _sentence_index += 1
+            _this_sentence_ts = time.monotonic()
+            _sentence_ref_ts = _this_sentence_ts  # reset — t=0 for THIS sentence's own timing logs
             # ── Timing: Groq first-sentence latency ───────────────────────
             # Logged only for the first sentence of each reply — this isolates
             # how long Groq took to generate the first usable chunk of text,
             # independent of how many sentences the full reply has.
             if _sentence_index == 1:
-                groq_first_sentence_ms = (time.monotonic() - _final_transcript_ts) * 1000
+                groq_first_sentence_ms = (_this_sentence_ts - _final_transcript_ts) * 1000
                 logger.info(
                     "TIMING SID=%s — Groq first sentence ready: %.0fms after transcript",
                     call_sid, groq_first_sentence_ms,
@@ -1446,27 +1698,59 @@ async def audio_stream(ws: WebSocket, call_sid: str):
         checking something) must NEVER trigger an unsolicited nudge or
         script recitation. That was the root cause of the agent appearing
         to "restart the script" mid-conversation.
+
+        FIX: previously this slept a flat SILENCE_NUDGE_S from when the
+        task was CREATED (near call start), then — once real-time playback
+        duration made `_speaking` accurate — separately waited for speaking
+        to stop before firing IMMEDIATELY once it did. That meant the
+        opening line itself (several real seconds to speak) ate almost the
+        entire silence budget, so the nudge fired moments after the caller
+        could first possibly respond, not after SILENCE_NUDGE_S of them
+        actually saying nothing. Confirmed real complaint: "it directly
+        asks 'are you there' without even listening." Now the clock only
+        starts counting once the agent has genuinely stopped speaking, and
+        resets to zero any time speaking resumes (e.g. the opening line
+        itself), so the caller always gets a full SILENCE_NUDGE_S of real
+        quiet time before the nudge fires.
         """
         nonlocal _last_utterance_ts
-        await asyncio.sleep(SILENCE_NUDGE_S)
+        poll_s = 0.25
+        quiet_since: float | None = None
+        max_total_wait_s = 45.0
+        total_waited_s = 0.0
 
-        # Only fire if the partner has NEVER spoken — zero entries in
-        # transcript from anyone other than the system/agent's own opening.
-        partner_has_spoken = any(
-            e["speaker"] not in ("Agent", "system") for e in meta.get("transcript", [])
-        )
-        if partner_has_spoken:
-            logger.debug(
-                "Silence nudge skipped SID=%s — partner has already spoken, "
-                "this is a natural pause not a dead call.",
-                call_sid,
+        while total_waited_s < max_total_wait_s:
+            await asyncio.sleep(poll_s)
+            total_waited_s += poll_s
+
+            partner_has_spoken = any(
+                e["speaker"] not in ("Agent", "system") for e in meta.get("transcript", [])
             )
-            return
+            if partner_has_spoken:
+                logger.debug(
+                    "Silence nudge skipped SID=%s — partner has already spoken, "
+                    "this is a natural pause not a dead call.",
+                    call_sid,
+                )
+                return
 
-        if _speaking or _interrupt_flag:
-            return
+            if _speaking or _interrupt_flag:
+                quiet_since = None   # agent is talking — reset the quiet-time clock
+                continue
 
-        logger.info("Silence nudge firing SID=%s — zero exchange after %ds", call_sid, SILENCE_NUDGE_S)
+            if quiet_since is None:
+                quiet_since = time.monotonic()
+                continue
+
+            if time.monotonic() - quiet_since >= SILENCE_NUDGE_S:
+                break
+        else:
+            return   # hit the safety cap without ever qualifying — give up quietly
+
+        logger.info(
+            "Silence nudge firing SID=%s — %ds of genuine silence after the agent stopped speaking",
+            call_sid, SILENCE_NUDGE_S,
+        )
         nudge = "Hello? Are you there?"
         meta["history"].append({"role": "assistant", "content": nudge})
         stream_sid = meta.get("stream_sid", "")
@@ -1537,6 +1821,28 @@ async def audio_stream(ws: WebSocket, call_sid: str):
                         logger.info("Stream started SID=%s StreamSid=%s",
                                     call_sid, meta["stream_sid"])
 
+                        # Speak the opening line NOW, through our own TTS
+                        # pipeline, over this same stream — this is what
+                        # makes it show up in the recording and makes
+                        # barge-in detection active from the very first
+                        # word (previously impossible, since the opening
+                        # played via Twilio's <Say> before this stream, or
+                        # even Deepgram, existed at all). Fired as a
+                        # background task so it doesn't block this loop
+                        # from continuing to forward the partner's own
+                        # audio to Deepgram concurrently.
+                        opening_line = meta.get("opening_line", "")
+                        if opening_line:
+                            _opening_ts = _utc_naive()
+                            meta["transcript"].append({
+                                "speaker": "Agent", "text": opening_line,
+                                "ts": _opening_ts.isoformat(),
+                            })
+                            asyncio.create_task(_db_insert_line(call_sid, "Agent", opening_line, _opening_ts))
+                            asyncio.create_task(
+                                _send_tts_reply(opening_line, meta["stream_sid"])
+                            )
+
                     elif event == "media":
                         raw_audio = base64.b64decode(data["media"]["payload"])
                         # Timing: stamp every raw audio chunk arrival. Used to
@@ -1566,8 +1872,45 @@ async def audio_stream(ws: WebSocket, call_sid: str):
                 nonlocal _interrupt_flag
                 async for msg in dg_ws:
                     result = json.loads(msg)
+                    msg_type = result.get("type")
 
-                    if result.get("type") != "Results":
+                    # ── SpeechStarted (requires vad_events=true) — LOGGED
+                    # ONLY, does NOT trigger barge-in. ──
+                    #
+                    # Previously this fired an immediate barge-in on pure
+                    # acoustic activity, with no transcription required, on
+                    # the theory that it's faster than waiting for Results.
+                    # Confirmed real-world failure: a live call log showed
+                    # THREE consecutive barge-ins, ALL of the VAD-only type,
+                    # with NO corresponding transcribed partner speech in two
+                    # of the three cases (one followed by 14 seconds of dead
+                    # silence before a confused "Hello?"). This is the
+                    # signature of acoustic echo — the caller's phone mic
+                    # picking up the agent's OWN voice and sending it back
+                    # up the line, which Deepgram's VAD correctly flags as
+                    # "someone started talking" even though there are no
+                    # real words, because there aren't any. Twilio Media
+                    # Streams does not do acoustic echo cancellation between
+                    # what it plays out and what it captures back in — that
+                    # is left entirely to the callee's device, which mobile
+                    # phones on speaker (or certain call-forwarding setups)
+                    # often don't handle well.
+                    #
+                    # Fix: only the Results branch below (which requires
+                    # Deepgram to have actually transcribed real words) may
+                    # set _interrupt_flag now. An echo of the agent's own
+                    # voice essentially never resolves into coherent
+                    # transcribed speech; a genuine interruption does,
+                    # usually within a few hundred ms via interim_results.
+                    if msg_type == "SpeechStarted":
+                        logger.debug(
+                            "SpeechStarted (VAD) SID=%s — logged only, not treated as barge-in "
+                            "(see comment: this fires on echo without real words too often).",
+                            call_sid,
+                        )
+                        continue
+
+                    if msg_type != "Results":
                         continue
 
                     alts = result.get("channel", {}).get("alternatives", [])
@@ -1575,16 +1918,25 @@ async def audio_stream(ws: WebSocket, call_sid: str):
                         continue
 
                     text = alts[0].get("transcript", "").strip()
-                    if not text:
+                    # Require at least 2 characters — filters out stray
+                    # single-character noise blips Deepgram occasionally
+                    # transcribes from line static, without needing to
+                    # wait for a full word.
+                    if not text or len(text) < 2:
                         continue
 
                     is_final = result.get("is_final", False)
 
-                    # ── Barge-in detection — now genuinely instant ──────────
-                    # This check fires the moment ANY Deepgram message arrives,
-                    # regardless of what task 3 is currently doing, because
-                    # this task is never blocked waiting on Groq/TTS/Twilio.
-                    if _speaking and not _interrupt_flag:
+                    # ── Barge-in detection — the ONLY trigger now (see the
+                    # SpeechStarted comment above for why the VAD-only path
+                    # was disabled). This still fires on interim (non-final)
+                    # results, so it's still fast — Deepgram typically
+                    # produces an interim result within a few hundred ms of
+                    # real speech starting — but it requires ACTUAL
+                    # transcribed content, which an echo of the agent's own
+                    # voice essentially never produces.
+                    if (_speaking and not _interrupt_flag and _speaking_started_at
+                            and (time.monotonic() - _speaking_started_at) >= _BARGE_IN_GRACE_S):
                         logger.info(
                             "Barge-in signal SID=%s — partner speaking: %r",
                             call_sid, text[:40],
