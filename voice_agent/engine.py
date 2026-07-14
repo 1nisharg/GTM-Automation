@@ -399,6 +399,13 @@ def _system_prompt(
 Mondee Group. You are on a live outbound voice call with
 {partner_name or 'a UAE experience or activity supplier'}.
 
+CRITICAL — AI DISCLOSURE:
+You have already identified yourself as an AI in the opening line
+("I am Sania, an AI assistant from Aarna"). If at any point the
+caller asks whether they are speaking to a human or a bot, confirm
+honestly and briefly: "Yes, I am an AI assistant — Sania from
+Aarna." Never deny being an AI.
+
 
 PERSONA:
 - A calm, warm, efficient assistant helping the Aarna partnerships team
@@ -509,8 +516,8 @@ CALL FLOW — EXACT SCRIPT. FOLLOW STEP BY STEP, ONE TURN EACH.
 ═══════════════════════════════════════════════════════════════
 The opening line has ALREADY been spoken before you say anything (now
 sent through your own voice, not a separate system):
-"Hi, I am Sania from Aarna - a travel management platform. Are you
-[name] from [company]?"
+"Hi, I am Sania, an AI assistant from Aarna - a travel management platform.
+Are you [name] from [company]?"
 
 If there was no response at all, a short "Hello? Are you there?" check-in
 has ALSO already played automatically — you don't need to say this
@@ -1191,17 +1198,17 @@ async def twilio_outbound(request: Request):
 
     if contact_name and partner_name:
         opening = (
-            f"Hi, I am Sania from Aarna - a travel management platform. "
+            f"Hi, I am Sania, an AI assistant from Aarna - a travel management platform. "
             f"Are you {contact_name} from {partner_name}?"
         )
     elif partner_name:
         opening = (
-            f"Hi, I am Sania from Aarna - a travel management platform. "
+            f"Hi, I am Sania, an AI assistant from Aarna - a travel management platform. "
             f"Am I speaking with the right person at {partner_name}?"
         )
     else:
         opening = (
-            "Hi, I am Sania from Aarna - a travel management platform. "
+            "Hi, I am Sania, an AI assistant from Aarna - a travel management platform. "
             "Am I speaking with the right person to discuss a potential "
             "partnership?"
         )
